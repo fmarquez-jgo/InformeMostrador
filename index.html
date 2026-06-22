@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mostrador PDF Fix — JGO Haciendo Logística</title>
+  <style>
+    :root {
+      --bg: #f4f6f9;
+      --card: #ffffff;
+      --border: #dde1e7;
+      --text: #1a1d23;
+      --muted: #7a828f;
+      --green: #1a7f4b;
+      --green-light: #eaf5ee;
+      --green-border: #2da05f;
+      --red: #c0392b;
+      --red-light: #fdecea;
+      --accent: #1a5276;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    header {
+      background: #0a1628;
+      color: #fff;
+      padding: 1rem 2rem;
+      display: flex;
+      align-items: center;
+      gap: 1.2rem;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    }
+
+    header svg {
+      width: 48px;
+      height: 48px;
+      flex-shrink: 0;
+    }
+
+    .header-divider {
+      width: 1px;
+      height: 48px;
+      background: rgba(255,255,255,0.2);
+    }
+
+    header h1 {
+      font-size: 1.25rem;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+    }
+
+    header h1 span {
+      display: block;
+      font-size: 0.78rem;
+      font-weight: 400;
+      color: rgba(255,255,255,0.55);
+      margin-top: 2px;
+    }
+
+    main {
+      max-width: 720px;
+      margin: 2.5rem auto;
+      padding: 0 1rem;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 2rem;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.06);
+    }
+
+    #drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: 10px;
+      padding: 2.5rem 1rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      position: relative;
+    }
+
+    #drop-zone:hover, #drop-zone.dragover {
+      border-color: var(--green-border);
+      background: var(--green-light);
+    }
+
+    #drop-zone input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+      width: 100%;
+      height: 100%;
+    }
+
+    #drop-zone .icon { font-size: 2.5rem; display: block; margin-bottom: 0.6rem; }
+    #drop-zone .main-txt { font-size: 1rem; font-weight: 600; color: var(--text); }
+    #drop-zone .sub-txt { font-size: 0.82rem; color: var(--muted); margin-top: 4px; }
+
+    #file-list { margin-top: 1.2rem; display: flex; flex-direction: column; gap: 0.5rem; }
+
+    .file-card {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.6rem 0.9rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      font-size: 0.85rem;
+    }
+
+    .file-card .pdf-icon { font-size: 1.2rem; flex-shrink: 0; }
+    .file-card .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+    .file-card .size { color: var(--muted); flex-shrink: 0; font-size: 0.78rem; }
+
+    .badge {
+      flex-shrink: 0;
+      padding: 2px 10px;
+      border-radius: 20px;
+      font-size: 0.73rem;
+      font-weight: 600;
+    }
+    .badge-wait    { background: #eef0f3; color: var(--muted); }
+    .badge-ok      { background: var(--green-light); color: var(--green); }
+    .badge-error   { background: var(--red-light); color: var(--red); }
+    .badge-working { background: #fff8e1; color: #b07d00; }
+
+    .remove-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 0.95rem;
+      padding: 2px 4px;
+      border-radius: 4px;
+      flex-shrink: 0;
+      transition: color 0.15s;
+    }
+    .remove-btn:hover { color: var(--red); }
+
+    #btn-process {
+      display: block;
+      width: 100%;
+      margin-top: 1.4rem;
+      padding: 0.8rem;
+      background: var(--green);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    #btn-process:hover:not(:disabled) { background: var(--green-border); }
+    #btn-process:disabled { background: #b0bec5; cursor: not-allowed; }
+
+    #log {
+      display: none;
+      margin-top: 1.2rem;
+      background: #0a1628;
+      color: #a8d8a8;
+      font-family: 'Courier New', monospace;
+      font-size: 0.78rem;
+      padding: 0.9rem 1rem;
+      border-radius: 8px;
+      max-height: 180px;
+      overflow-y: auto;
+      line-height: 1.6;
+    }
+
+    #results { margin-top: 1rem; display: flex; flex-direction: column; gap: 0.5rem; }
+
+    .result-row {
+      display: flex;
+      align-items: center;
+      gap: 0.7rem;
+      padding: 0.6rem 0.9rem;
+      border-radius: 8px;
+      background: var(--green-light);
+      border: 1px solid #b2dfcb;
+      font-size: 0.85rem;
+    }
+
+    .result-row .r-name { flex: 1; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .result-row .r-info { font-size: 0.76rem; color: var(--green); flex-shrink: 0; }
+
+    .dl-btn {
+      padding: 4px 14px;
+      background: var(--green);
+      color: #fff;
+      border-radius: 6px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      text-decoration: none;
+      white-space: nowrap;
+      flex-shrink: 0;
+      transition: background 0.15s;
+    }
+    .dl-btn:hover { background: var(--green-border); }
+
+    footer {
+      text-align: center;
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 2rem;
+      padding-bottom: 1.5rem;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <!-- Logo JGO simplificado en SVG inline -->
+  <svg viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <rect width="48" height="48" rx="8" fill="#1a5276"/>
+    <rect x="6" y="14" width="36" height="10" rx="2" fill="#2e86c1"/>
+    <rect x="6" y="26" width="17" height="8" rx="2" fill="#1a7f4b"/>
+    <rect x="25" y="26" width="17" height="8" rx="2" fill="#1a7f4b"/>
+    <rect x="10" y="36" width="6" height="3" rx="1" fill="#aaa"/>
+    <rect x="32" y="36" width="6" height="3" rx="1" fill="#aaa"/>
+  </svg>
+  <div class="header-divider"></div>
+  <h1>
+    Mostrador PDF Fix
+    <span>Corrector de enlaces en reportes de booking</span>
+  </h1>
+</header>
+
+<main>
+  <div class="card">
+    <div id="drop-zone">
+      <input type="file" id="file-input" accept=".pdf" multiple />
+      <span class="icon">📂</span>
+      <p class="main-txt">Arrastrá los PDFs acá</p>
+      <p class="sub-txt">o hacé clic para seleccionar archivos</p>
+    </div>
+
+    <div id="file-list"></div>
+
+    <button id="btn-process" disabled>⚙️&nbsp; Corregir enlaces</button>
+
+    <div id="log"></div>
+    <div id="results"></div>
+  </div>
+</main>
+
+<footer>JGO Haciendo Logística &mdash; uso interno</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script>
+  const { PDFDocument, PDFName, PDFArray, PDFNumber } = PDFLib;
+
+  const dropZone   = document.getElementById('drop-zone');
+  const fileInput  = document.getElementById('file-input');
+  const fileList   = document.getElementById('file-list');
+  const btnProcess = document.getElementById('btn-process');
+  const logEl      = document.getElementById('log');
+  const resultsEl  = document.getElementById('results');
+
+  let files = [];
+
+  // Coordenadas Y conocidas de los 4 thumbnails (bounds de anotación correctos)
+  const THUMB_BOUNDS = [
+    [1040.31, 1064.78],
+    [1068.62, 1092.61],
+    [1097.41, 1120.44],
+    [1124.28, 1148.75],
+  ];
+
+  function fmt(b) {
+    if (b < 1024)    return b + ' B';
+    if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+    return (b / 1048576).toFixed(1) + ' MB';
+  }
+
+  function log(msg) {
+    logEl.style.display = 'block';
+    logEl.innerHTML += msg + '<br>';
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function setBadge(i, type, text) {
+    const badge = document.getElementById('badge-' + i);
+    if (!badge) return;
+    badge.className = 'badge badge-' + type;
+    badge.textContent = text;
+  }
+
+  function renderList() {
+    fileList.innerHTML = '';
+    files.forEach((f, i) => {
+      const c = document.createElement('div');
+      c.className = 'file-card';
+      c.id = 'card-' + i;
+      c.innerHTML = `
+        <span class="pdf-icon">📄</span>
+        <span class="name" title="${f.file.name}">${f.file.name}</span>
+        <span class="size">${fmt(f.file.size)}</span>
+        <span class="badge badge-wait" id="badge-${i}">Pendiente</span>
+        <button class="remove-btn" data-idx="${i}" title="Quitar">✕</button>
+      `;
+      fileList.appendChild(c);
+    });
+    fileList.querySelectorAll('.remove-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        files.splice(parseInt(btn.dataset.idx), 1);
+        renderList();
+        btnProcess.disabled = files.length === 0;
+      });
+    });
+    btnProcess.disabled = files.length === 0;
+  }
+
+  function addFiles(newFiles) {
+    for (const f of newFiles) {
+      if (f.name.toLowerCase().endsWith('.pdf') &&
+          !files.find(e => e.file.name === f.name && e.file.size === f.size)) {
+        files.push({ file: f });
+      }
+    }
+    renderList();
+  }
+
+  fileInput.addEventListener('change', e => addFiles(e.target.files));
+
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    dropZone.classList.remove('dragover');
+    addFiles(e.dataTransfer.files);
+  });
+
+  // ── Lógica principal de corrección ──────────────────────────────────────────
+
+  async function fixPdf(fileObj, idx) {
+    setBadge(idx, 'working', 'Procesando…');
+    log(`📄 ${fileObj.file.name}`);
+
+    const arrayBuf = await fileObj.file.arrayBuffer();
+    const pdfDoc   = await PDFDocument.load(arrayBuf);
+    const pages    = pdfDoc.getPages();
+
+    let totalFixed = 0;
+
+    for (let p = 0; p < pages.length; p++) {
+      const page     = pages[p];
+      const { height } = page.getSize();
+      const annotsRef  = page.node.get(PDFName.of('Annots'));
+      if (!annotsRef) continue;
+
+      const annots = pdfDoc.context.lookup(annotsRef);
+      if (!annots || typeof annots.get !== 'function') continue;
+
+      const count = annots.size();
+      let pageFixed = 0;
+
+      for (let a = 0; a < count; a++) {
+        const annotRef  = annots.get(a);
+        const annot     = pdfDoc.context.lookup(annotRef);
+        if (!annot) continue;
+
+        const subtype = annot.get(PDFName.of('Subtype'));
+        if (!subtype || subtype.encodedName !== '/Link') continue;
+
+        const rectObj = annot.get(PDFName.of('Rect'));
+        if (!rectObj) continue;
+
+        const rect = pdfDoc.context.lookup(rectObj);
+        if (!rect) continue;
+
+        // Rect en PDF: [x1, y1, x2, y2]
+        const x1 = rect.get(0).numberValue;
+        const y1 = rect.get(1).numberValue;
+        const x2 = rect.get(2).numberValue;
+        const y2 = rect.get(3).numberValue;
+
+        const midY = (y1 + y2) / 2;
+
+        // Buscar cuál de los 4 thumbnails corresponde por posición Y
+        let bestBound = null;
+        let bestDist  = Infinity;
+
+        for (const [by1, by2] of THUMB_BOUNDS) {
+          const bmid = (by1 + by2) / 2;
+          const dist = Math.abs(midY - bmid);
+          if (dist < bestDist) {
+            bestDist  = dist;
+            bestBound = [by1, by2];
+          }
+        }
+
+        // Solo corregir si el enlace está desplazado (más de 2pt de diferencia)
+        if (bestBound && (Math.abs(y1 - bestBound[0]) > 2 || Math.abs(y2 - bestBound[1]) > 2)) {
+          rect.set(1, PDFNumber.of(bestBound[0]));
+          rect.set(3, PDFNumber.of(bestBound[1]));
+          pageFixed++;
+          totalFixed++;
+        }
+      }
+
+      if (pageFixed > 0) {
+        log(`  → Página ${p + 1}: ${pageFixed} enlace(s) corregido(s)`);
+      }
+    }
+
+    if (totalFixed === 0) {
+      log(`  ℹ️ Sin cambios necesarios`);
+      setBadge(idx, 'ok', 'Sin cambios');
+    } else {
+      log(`  ✅ Total: ${totalFixed} enlace(s) corregido(s)`);
+      setBadge(idx, 'ok', `${totalFixed} fix`);
+    }
+
+    const fixedBytes = await pdfDoc.save();
+    const blob = new Blob([fixedBytes], { type: 'application/pdf' });
+    const url  = URL.createObjectURL(blob);
+
+    const baseName = fileObj.file.name.replace(/\.pdf$/i, '');
+    const dlName   = baseName + '_fix.pdf';
+
+    const row = document.createElement('div');
+    row.className = 'result-row';
+    row.innerHTML = `
+      <span class="pdf-icon">✅</span>
+      <span class="r-name">${dlName}</span>
+      <span class="r-info">${fmt(fixedBytes.byteLength)}</span>
+      <a class="dl-btn" href="${url}" download="${dlName}">⬇ Descargar</a>
+    `;
+    resultsEl.appendChild(row);
+  }
+
+  btnProcess.addEventListener('click', async () => {
+    btnProcess.disabled = true;
+    logEl.innerHTML = '';
+    resultsEl.innerHTML = '';
+    log('🔧 Iniciando corrección de enlaces...');
+
+    for (let i = 0; i < files.length; i++) {
+      try {
+        await fixPdf(files[i], i);
+      } catch (err) {
+        setBadge(i, 'error', 'Error');
+        log(`  ❌ Error: ${err.message}`);
+      }
+    }
+
+    log('✔ Proceso finalizado.');
+    btnProcess.disabled = false;
+  });
+</script>
+</body>
+</html>
