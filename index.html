@@ -103,11 +103,11 @@
         logEl=document.getElementById('log'), resultsEl=document.getElementById('results');
   let files=[];
 
-  // Calibrado pixel-a-pixel sobre el PDF real:
-  // X: primera foto en 949pt, paso horizontal 28.1pt, ancho 22.5pt
-  // Y: primera fila empieza en 253.3pt, paso vertical entre filas 32.3pt, alto 22.5pt
+  // Coordenadas calibradas pixel-a-pixel sobre PDF real (A4 landscape 1190x841pt)
+  // X: primera foto en x=949pt, paso=28.1pt, ancho=22.5pt
+  // Y: primera fila en y=252.67pt, paso=32.33pt, alto=24.67pt (tamaño real del thumb)
   const X0=949.0, PASO_X=28.1, W=22.5;
-  const Y0=253.3, PASO_Y=32.3, H=22.5;
+  const Y0=252.67, PASO_Y=32.33, H=24.67;
 
   function fmt(b){ return b<1024?b+' B':b<1048576?(b/1024).toFixed(1)+' KB':(b/1048576).toFixed(1)+' MB'; }
   function log(m){ logEl.style.display='block'; logEl.innerHTML+=m+'<br>'; logEl.scrollTop=logEl.scrollHeight; }
@@ -126,7 +126,9 @@
     btnProcess.disabled=!files.length;
   }
   function addFiles(fs){
-    for(const f of fs) if(f.name.toLowerCase().endsWith('.pdf')&&!files.find(e=>e.file.name===f.name&&e.file.size===f.size)) files.push({file:f});
+    for(const f of fs)
+      if(f.name.toLowerCase().endsWith('.pdf')&&!files.find(e=>e.file.name===f.name&&e.file.size===f.size))
+        files.push({file:f});
     renderList();
   }
   fileInput.addEventListener('change',e=>addFiles(e.target.files));
@@ -146,7 +148,7 @@
       const annots=pdfDoc.context.lookup(aRef);
       if(!annots||typeof annots.get!=='function') continue;
 
-      // Recolectar todos los links y agrupar por fila (Y original)
+      // Agrupar links por fila (Y original)
       const byRow={};
       for(let a=0;a<annots.size();a++){
         const ann=pdfDoc.context.lookup(annots.get(a));
@@ -162,7 +164,7 @@
         byRow[key].push(rect);
       }
 
-      // Ordenar filas por Y original y asignar posición correcta por índice de fila
+      // Ordenar filas por Y y reasignar posición exacta por índice
       const sortedRows=Object.keys(byRow).map(Number).sort((a,b)=>a-b);
       sortedRows.forEach((key,rowIdx)=>{
         const row=byRow[key];
@@ -176,7 +178,7 @@
           rect.set(3,PDFNumber.of(newY1));
           total++;
         });
-        log(`  → fila ${rowIdx+1}: ${row.length} link(s) → x=${X0.toFixed(0)}, y=${newY0.toFixed(1)}`);
+        log(`  → fila ${rowIdx+1}: ${row.length} enlaces → y=${newY0.toFixed(1)}`);
       });
     }
 
@@ -193,7 +195,9 @@
   btnProcess.addEventListener('click',async()=>{
     btnProcess.disabled=true; logEl.innerHTML=''; resultsEl.innerHTML='';
     log('🔧 Corrigiendo...');
-    for(let i=0;i<files.length;i++) try{ await fixPdf(files[i],i); } catch(e){ setBadge(i,'error','Error'); log('  ❌ '+e.message); }
+    for(let i=0;i<files.length;i++)
+      try{ await fixPdf(files[i],i); }
+      catch(e){ setBadge(i,'error','Error'); log('  ❌ '+e.message); }
     log('✔ Listo.'); btnProcess.disabled=false;
   });
 </script>
