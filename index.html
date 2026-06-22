@@ -103,28 +103,26 @@
         logEl=document.getElementById('log'), resultsEl=document.getElementById('results');
   let files=[];
 
-  // ── LÓGICA DE CORRECCIÓN ────────────────────────────────────────────────────
+  // ── CORRECCIÓN CALIBRADA (constantes universales del sistema de reportes JGO) ──
   //
-  // PROBLEMA: los links están corridos a la izquierda respecto a los thumbnails.
-  // El sistema de reportes genera los links con:
-  //   - paso entre links: 25.5pt
-  //   - x_inicio: varía según el ancho de la columna FOTOS de cada PDF
+  // El generador de PDFs desplaza los links respecto a los thumbnails de forma
+  // sistemática y consistente en todos los reportes. Las correcciones son:
   //
-  // Los thumbnails reales tienen:
-  //   - paso entre thumbs: 27.5pt (más separado)
-  //   - x_inicio = x_primer_link_de_fila + OFFSET_X_FIJO
+  // EJE X:
+  //   - El primer link de cada fila está OFFSET_X pts a la izquierda del primer thumb
+  //   - Cada thumb siguiente está PASO_X pts más separado que cada link siguiente
+  //   → X_thumb[i] = X_link[0] + OFFSET_X + i * PASO_X
   //
-  // OFFSET_X_FIJO = 86pt (constante medida en múltiples PDFs del mismo sistema)
-  // PASO_THUMB    = 27.5pt
-  // ANCHO_LINK    = 22.5pt (se mantiene)
-  //
-  // Para Y: el sistema PDF usa Y=0 en la parte inferior de la página.
-  // Los links originales tienen el Y correcto en Y (centrados sobre las fotos),
-  // NO se modifica el Y — solo se corrige X.
+  // EJE Y:
+  //   - Los links están OFFSET_Y pts más arriba que los thumbnails
+  //   → Y_nuevo = Y_link_original + OFFSET_Y  (en coords PyMuPDF, desde arriba)
+  //   → En coords PDF nativas (Y desde abajo): restar OFFSET_Y del Rect[1] y Rect[3]
 
-  const OFFSET_X = 86.0;   // offset fijo: primer link → primer thumbnail
-  const PASO_X   = 27.5;   // paso real entre thumbnails
-  const ANCHO    = 22.5;   // ancho del área clickeable
+  const OFFSET_X = 86.0;    // pts: primer link → primer thumbnail (medido en GGZ y SYNT)
+  const PASO_X   = 27.5;    // pts: paso real entre thumbnails (vs 25.5pt original)
+  const ANCHO    = 22.5;    // pts: ancho del área clickeable (igual al original)
+  const OFFSET_Y = 17.97;   // pts: links están esta cantidad MÁS ARRIBA que los thumbs
+                             // (en coords PDF nativas: restar del y0 y y1 del Rect)
 
   function fmt(b){ return b<1024?b+' B':b<1048576?(b/1024).toFixed(1)+' KB':(b/1048576).toFixed(1)+' MB'; }
   function log(m){ logEl.style.display='block'; logEl.innerHTML+=m+'<br>'; logEl.scrollTop=logEl.scrollHeight; }
@@ -165,7 +163,7 @@
       const annots=pdfDoc.context.lookup(aRef);
       if(!annots||typeof annots.get!=='function') continue;
 
-      // Recolectar links agrupados por fila (mismo Y)
+      // Agrupar links por fila (mismo Y en coords PDF nativas)
       const byRow={};
       for(let a=0;a<annots.size();a++){
         const ann=pdfDoc.context.lookup(annots.get(a));
@@ -176,30 +174,35 @@
         if(!rObj) continue;
         const rect=pdfDoc.context.lookup(rObj);
         if(!rect) continue;
-        const key=Math.round(rect.get(1).numberValue);  // agrupar por Y (coords PDF)
+        // Rect en PDF nativo: [x0, y_bottom, x1, y_top]  (Y desde abajo)
+        const key=Math.round(rect.get(1).numberValue);
         if(!byRow[key]) byRow[key]=[];
         byRow[key].push(rect);
       }
 
       for(const key of Object.keys(byRow)){
         const row=byRow[key];
-        // Ordenar por X para mantener el orden correcto
         row.sort((a,b)=>a.get(0).numberValue-b.get(0).numberValue);
 
-        // X del primer link de esta fila (referencia dinámica)
+        // X dinámico: anclar al primer link de la fila
         const x0_link = row[0].get(0).numberValue;
-        // X del primer thumbnail = x0_link + OFFSET_X
         const x0_thumb = x0_link + OFFSET_X;
 
+        // Y: bajar los links para que queden sobre los thumbs
+        // En coords PDF nativas (Y desde abajo): restar OFFSET_Y
+        const orig_y0 = row[0].get(1).numberValue;  // y_bottom original
+        const orig_y1 = row[0].get(3).numberValue;  // y_top original
+        const new_y0  = orig_y0 - OFFSET_Y;          // bajar en visual = restar en PDF nativo
+        const new_y1  = orig_y1 - OFFSET_Y;
+
         row.forEach((rect,i)=>{
-          const newX0 = x0_thumb + i * PASO_X;
-          const newX1 = newX0 + ANCHO;
-          // Y no se modifica — ya está sobre las fotos
-          rect.set(0, PDFNumber.of(newX0));
-          rect.set(2, PDFNumber.of(newX1));
+          rect.set(0, PDFNumber.of(x0_thumb + i * PASO_X));
+          rect.set(2, PDFNumber.of(x0_thumb + i * PASO_X + ANCHO));
+          rect.set(1, PDFNumber.of(new_y0));
+          rect.set(3, PDFNumber.of(new_y1));
           total++;
         });
-        log(`  → fila y≈${key}: ${row.length} enlaces  x_base=${x0_thumb.toFixed(1)}`);
+        log(`  → fila: ${row.length} enlaces  x=${x0_thumb.toFixed(0)}  y_pdf=${new_y0.toFixed(1)}`);
       }
     }
 
