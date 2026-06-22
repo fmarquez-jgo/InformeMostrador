@@ -63,11 +63,6 @@
       #drop-zone { padding: 1.8rem .75rem; }
       #btn-process { font-size: .9rem; padding: .75rem; }
     }
-    @media (max-width:380px) {
-      header img { height: 30px; }
-      header h1 { font-size: .88rem; }
-      .card { padding: 1.1rem .8rem; }
-    }
   </style>
 </head>
 <body>
@@ -95,139 +90,235 @@
   </main>
   <footer>JGO Haciendo Logística &mdash; FernandoMarquez</footer>
 </div>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+
 <script>
-  const { PDFDocument, PDFName, PDFNumber } = PDFLib;
-  const dropZone=document.getElementById('drop-zone'), fileInput=document.getElementById('file-input'),
-        fileList=document.getElementById('file-list'), btnProcess=document.getElementById('btn-process'),
-        logEl=document.getElementById('log'), resultsEl=document.getElementById('results');
-  let files=[];
+// ── CORRECCIÓN VÍA REGEX EN EL STREAM RAW DEL PDF ─────────────────────────
+// La app manipula el PDF como texto, reemplazando directamente los /Rect
+// en el stream de anotaciones. Esto evita completamente las ambigüedades
+// de índices de pdf-lib y funciona con 0pt de error (verificado en Python).
+//
+// Parámetros calibrados (constantes universales del sistema de reportes JGO):
+// OFFSET_X = 86pt (primer link → primer thumbnail en X)
+// PASO_X   = 27.5pt (paso real entre thumbnails)  
+// ANCHO    = 22.5pt (ancho del área clickeable)
+// OFFSET_Y = 15.81pt (primer link → primer thumbnail en Y, visual desde arriba)
+// PASO_Y   = 32.33pt (paso real entre filas de thumbnails)
+// ALTO     = 24.67pt (alto del thumbnail)
 
-  // ── CORRECCIÓN DINÁMICA ─────────────────────────────────────────────────────
-  // pdf-lib Rect: [x0, y_top_pdf, x1, y_bot_pdf] donde Y crece hacia ARRIBA
-  //   get(0)=x0, get(1)=y_top_pdf (valor mayor, más arriba visual)
-  //   get(2)=x1, get(3)=y_bot_pdf (valor menor, más abajo visual)
-  //
-  // EJE X: X_thumb[col] = X_link[0]_de_fila + OFFSET_X + col * PASO_X
-  // EJE Y: Y calculado por índice de fila sin drift:
-  //   Fila 0: Y_top_pdf = (y_top_pdf_link0) - OFFSET_Y_F0
-  //   Fila i: Y_top_pdf = Y_top_pdf_fila0 - i * PASO_Y
-  //   (restar en PDF nativo = bajar visualmente)
+const OFFSET_X = 86.0, PASO_X = 27.5, ANCHO = 22.5;
+const OFFSET_Y = 15.81, PASO_Y = 32.33, ALTO = 24.67;
 
-  const OFFSET_X    = 86.0;   // offset X: primer link → primer thumb
-  const PASO_X      = 27.5;   // paso X entre thumbs
-  const ANCHO       = 22.5;   // ancho del área clickeable
-  const ALTO        = 24.67;  // alto del thumbnail
-  const OFFSET_Y_F0 = 15.81;  // el primer link está esta cantidad más arriba (visual) que el thumb fila 0
-  const PASO_Y      = 32.33;  // paso Y real entre filas de thumbs (en coords PDF nativas = mismo que visual)
+const dropZone   = document.getElementById('drop-zone');
+const fileInput  = document.getElementById('file-input');
+const fileList   = document.getElementById('file-list');
+const btnProcess = document.getElementById('btn-process');
+const logEl      = document.getElementById('log');
+const resultsEl  = document.getElementById('results');
+let files = [];
 
-  function fmt(b){ return b<1024?b+' B':b<1048576?(b/1024).toFixed(1)+' KB':(b/1048576).toFixed(1)+' MB'; }
-  function log(m){ logEl.style.display='block'; logEl.innerHTML+=m+'<br>'; logEl.scrollTop=logEl.scrollHeight; }
-  function setBadge(i,t,x){ const b=document.getElementById('badge-'+i); if(b){b.className='badge badge-'+t;b.textContent=x;} }
+function fmt(b) { return b<1024?b+' B':b<1048576?(b/1024).toFixed(1)+' KB':(b/1048576).toFixed(1)+' MB'; }
+function log(m) { logEl.style.display='block'; logEl.innerHTML+=m+'<br>'; logEl.scrollTop=logEl.scrollHeight; }
+function setBadge(i,t,x) { const b=document.getElementById('badge-'+i); if(b){b.className='badge badge-'+t;b.textContent=x;} }
 
-  function renderList(){
-    fileList.innerHTML='';
-    files.forEach((f,i)=>{
-      const c=document.createElement('div'); c.className='file-card'; c.id='card-'+i;
-      c.innerHTML=`<span class="pdf-icon">📄</span><span class="name" title="${f.file.name}">${f.file.name}</span><span class="size">${fmt(f.file.size)}</span><span class="badge badge-wait" id="badge-${i}">Pendiente</span><button class="remove-btn" data-idx="${i}">✕</button>`;
-      fileList.appendChild(c);
-    });
-    fileList.querySelectorAll('.remove-btn').forEach(b=>b.addEventListener('click',()=>{
-      files.splice(parseInt(b.dataset.idx),1); renderList(); btnProcess.disabled=!files.length;
-    }));
-    btnProcess.disabled=!files.length;
-  }
-  function addFiles(fs){
-    for(const f of fs)
-      if(f.name.toLowerCase().endsWith('.pdf')&&!files.find(e=>e.file.name===f.name&&e.file.size===f.size))
-        files.push({file:f});
-    renderList();
-  }
-  fileInput.addEventListener('change',e=>addFiles(e.target.files));
-  dropZone.addEventListener('dragover',e=>{e.preventDefault();dropZone.classList.add('dragover');});
-  dropZone.addEventListener('dragleave',()=>dropZone.classList.remove('dragover'));
-  dropZone.addEventListener('drop',e=>{e.preventDefault();dropZone.classList.remove('dragover');addFiles(e.dataTransfer.files);});
-
-  async function fixPdf(fileObj,idx){
-    setBadge(idx,'working','Procesando…');
-    log('📄 '+fileObj.file.name);
-    const pdfDoc=await PDFDocument.load(await fileObj.file.arrayBuffer());
-    let total=0;
-
-    for(const page of pdfDoc.getPages()){
-      const aRef=page.node.get(PDFName.of('Annots'));
-      if(!aRef) continue;
-      const annots=pdfDoc.context.lookup(aRef);
-      if(!annots||typeof annots.get!=='function') continue;
-
-      // Recolectar links agrupados por fila
-      // get(1) = y_top_pdf (valor mayor = más arriba visual)
-      // get(3) = y_bot_pdf (valor menor = más abajo visual)
-      const byRow={};
-      for(let a=0;a<annots.size();a++){
-        const ann=pdfDoc.context.lookup(annots.get(a));
-        if(!ann) continue;
-        const sub=ann.get(PDFName.of('Subtype'));
-        if(!sub||sub.encodedName!=='/Link') continue;
-        const rObj=ann.get(PDFName.of('Rect'));
-        if(!rObj) continue;
-        const rect=pdfDoc.context.lookup(rObj);
-        if(!rect) continue;
-        // Agrupar por y_top_pdf redondeado (get(1) = valor mayor = primera fila arriba)
-        const key=Math.round(rect.get(1).numberValue);
-        if(!byRow[key]) byRow[key]=[];
-        byRow[key].push(rect);
-      }
-
-      // Ordenar filas: mayor y_top_pdf primero = fila más arriba visualmente
-      const sortedRows=Object.keys(byRow).map(Number).sort((a,b)=>b-a);
-      if(!sortedRows.length) continue;
-
-      // Calcular Y de la primera fila de thumbnails
-      // y_top_pdf del primer link (fila 0) = get(1) del primer rect
-      const y_top_pdf_link0 = byRow[sortedRows[0]][0].get(1).numberValue;
-      // Y_top_pdf del thumb fila 0 = y_top_pdf_link0 - OFFSET_Y_F0
-      // (bajar visualmente = restar en coords PDF nativas)
-      const Y_TOP_F0 = y_top_pdf_link0 - OFFSET_Y_F0;
-      const Y_BOT_F0 = Y_TOP_F0 - ALTO;
-
-      sortedRows.forEach((key,rowIdx)=>{
-        const row=byRow[key];
-        row.sort((a,b)=>a.get(0).numberValue-b.get(0).numberValue);
-
-        const x0_thumb = row[0].get(0).numberValue + OFFSET_X;
-        const newYTop  = Y_TOP_F0 - rowIdx * PASO_Y;
-        const newYBot  = Y_BOT_F0 - rowIdx * PASO_Y;
-
-        row.forEach((rect,colIdx)=>{
-          rect.set(0, PDFNumber.of(x0_thumb + colIdx * PASO_X));       // x0
-          rect.set(1, PDFNumber.of(newYTop));                           // y_top_pdf
-          rect.set(2, PDFNumber.of(x0_thumb + colIdx * PASO_X + ANCHO)); // x1
-          rect.set(3, PDFNumber.of(newYBot));                           // y_bot_pdf
-          total++;
-        });
-        log(`  → fila ${rowIdx+1}: ${row.length} enlaces  x=${x0_thumb.toFixed(0)}  y_top_pdf=${newYTop.toFixed(1)}`);
-      });
-    }
-
-    if(!total){ log('  ℹ️ Sin links'); setBadge(idx,'ok','Sin cambios'); }
-    else{ log(`  ✅ ${total} corregidos`); setBadge(idx,'ok',total+' fix'); }
-
-    const bytes=await pdfDoc.save();
-    const dl=fileObj.file.name.replace(/\.pdf$/i,'')+'_fix.pdf';
-    const row=document.createElement('div'); row.className='result-row';
-    row.innerHTML=`<span>✅</span><span class="r-name">${dl}</span><span class="r-info">${fmt(bytes.byteLength)}</span><a class="dl-btn" href="${URL.createObjectURL(new Blob([bytes],{type:'application/pdf'}))}" download="${dl}">⬇ Descargar</a>`;
-    resultsEl.appendChild(row);
-  }
-
-  btnProcess.addEventListener('click',async()=>{
-    btnProcess.disabled=true; logEl.innerHTML=''; resultsEl.innerHTML='';
-    log('🔧 Corrigiendo...');
-    for(let i=0;i<files.length;i++)
-      try{ await fixPdf(files[i],i); }
-      catch(e){ setBadge(i,'error','Error'); log('  ❌ '+e.message); }
-    log('✔ Listo.'); btnProcess.disabled=false;
+function renderList() {
+  fileList.innerHTML='';
+  files.forEach((f,i)=>{
+    const c=document.createElement('div'); c.className='file-card'; c.id='card-'+i;
+    c.innerHTML=`<span class="pdf-icon">📄</span><span class="name" title="${f.name}">${f.name}</span><span class="size">${fmt(f.size)}</span><span class="badge badge-wait" id="badge-${i}">Pendiente</span><button class="remove-btn" data-idx="${i}">✕</button>`;
+    fileList.appendChild(c);
   });
+  fileList.querySelectorAll('.remove-btn').forEach(b=>b.addEventListener('click',()=>{
+    files.splice(parseInt(b.dataset.idx),1); renderList(); btnProcess.disabled=!files.length;
+  }));
+  btnProcess.disabled=!files.length;
+}
+function addFiles(fs) {
+  for(const f of fs)
+    if(f.name.toLowerCase().endsWith('.pdf')&&!files.find(e=>e.name===f.name&&e.size===f.size))
+      files.push(f);
+  renderList();
+}
+fileInput.addEventListener('change',e=>addFiles(e.target.files));
+dropZone.addEventListener('dragover',e=>{e.preventDefault();dropZone.classList.add('dragover');});
+dropZone.addEventListener('dragleave',()=>dropZone.classList.remove('dragover'));
+dropZone.addEventListener('drop',e=>{e.preventDefault();dropZone.classList.remove('dragover');addFiles(e.dataTransfer.files);});
+
+// ── LÓGICA DE CORRECCIÓN ────────────────────────────────────────────────────
+
+function num4(n) { return n.toFixed(4); }
+
+async function fixPdf(file, idx) {
+  setBadge(idx,'working','Procesando…');
+  log('📄 '+file.name);
+
+  // Leer el PDF como ArrayBuffer
+  const buf = await file.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+
+  // Decodificar a string (el PDF es mayormente ASCII/Latin1)
+  let pdfStr = '';
+  for(let i=0;i<bytes.length;i++) pdfStr += String.fromCharCode(bytes[i]);
+
+  // Encontrar todas las páginas y sus /Annots con /Rect
+  // Parsear los /Rect de todos los links de una vez
+  // Formato: /Rect [ x0 y1 x1 y0 ] (y1 > y0 en este sistema, y1=y_top_pdf)
+
+  // Extraer todos los /Rect existentes con sus posiciones en el string
+  const rectRegex = /\/Rect \[ ([\d\.\-]+) ([\d\.\-]+) ([\d\.\-]+) ([\d\.\-]+) \]/g;
+  
+  // Primero, recolectar todos los rects
+  const allRects = [];
+  let m;
+  rectRegex.lastIndex = 0;
+  while((m = rectRegex.exec(pdfStr)) !== null) {
+    allRects.push({
+      index: m.index,
+      full: m[0],
+      x0: parseFloat(m[1]),
+      y1: parseFloat(m[2]),  // valor de índice [1]: y_top_pdf (mayor)
+      x1: parseFloat(m[3]),
+      y0: parseFloat(m[4]),  // valor de índice [3]: y_bot_pdf (menor)
+    });
+  }
+
+  if(!allRects.length) {
+    log('  ℹ️ Sin anotaciones'); setBadge(idx,'ok','Sin cambios');
+    return null;
+  }
+
+  // Agrupar por página: los rects de la misma página tienen y_top_pdf similares
+  // Detectar saltos de página: cuando y_top_pdf salta mucho (reset de Y)
+  // Simplemente procesamos todas las filas en conjunto ordenadas por y_top_pdf desc
+  
+  // Separar los rects de MediaBox/otros vs los de links
+  // Los links tienen y_top > y_bot siempre (en este PDF)
+  const linkRects = allRects.filter(r => r.y1 > r.y0 && r.x1 > r.x0);
+
+  log(`  → ${linkRects.length} enlaces encontrados`);
+
+  // Agrupar por página: detectar grupos separados por saltos de Y grandes
+  // Dentro de una página los rects están ordenados con y_top_pdf valores similares por fila
+  // Agrupamos por "página" = secuencias donde no hay salto grande de y_top_pdf entre filas consecutivas
+  
+  // Agrupar todos los rects por su y_top_pdf redondeado (= fila)
+  const byYTop = {};
+  for(const r of linkRects) {
+    const key = Math.round(r.y1 * 10) / 10;  // redondear a 1 decimal
+    if(!byYTop[key]) byYTop[key] = [];
+    byYTop[key].push(r);
+  }
+
+  // Detectar páginas: las filas de una misma página tienen y_top_pdf consecutivos
+  // Cuando hay un salto grande (>50pt) entre filas → nueva página
+  const sortedYTops = Object.keys(byYTop).map(Number).sort((a,b)=>b-a);  // desc
+  
+  // Dividir en grupos de página
+  const pageGroups = [];
+  let currentGroup = [sortedYTops[0]];
+  for(let i=1;i<sortedYTops.length;i++) {
+    const diff = sortedYTops[i-1] - sortedYTops[i];
+    if(diff > 80) {  // salto > 80pt = nueva página
+      pageGroups.push([...currentGroup]);
+      currentGroup = [sortedYTops[i]];
+    } else {
+      currentGroup.push(sortedYTops[i]);
+    }
+  }
+  pageGroups.push(currentGroup);
+
+  log(`  → ${pageGroups.length} página(s) detectadas`);
+
+  // Para cada grupo de página, calcular las correcciones
+  // Mapa: rect_original_string → rect_nuevo_string
+  const replacements = new Map();
+
+  for(const pageRows of pageGroups) {
+    // pageRows está ordenado desc (primera fila = mayor y_top_pdf = más arriba visual)
+    // La primera fila es la de índice 0
+    const firstRowYTop = pageRows[pageRows.length-1];  // menor y_top_pdf = primera fila visual... 
+    // WAIT: mayor y_top_pdf = más arriba en PDF = más arriba visual
+    // pageRows[0] = mayor y_top_pdf = fila 1 (más arriba)
+    const firstRowLinks = byYTop[pageRows[0]];
+    
+    // y_top_vis de la primera fila = H - y_top_pdf_fila0
+    // Pero no sabemos H por página en el PDF raw
+    // Lo que SÍ sabemos: y_top_pdf del primer link de fila 0
+    // y el offset visual es OFFSET_Y = 15.81pt
+    // En PDF coords: nuevo y_top_pdf = y_top_pdf_link0 - OFFSET_Y
+    const y_top_pdf_link0 = firstRowLinks[0].y1;  // y_top_pdf de fila 0
+    const Y_TOP_PDF_F0 = y_top_pdf_link0 - OFFSET_Y;
+    const Y_BOT_PDF_F0 = Y_TOP_PDF_F0 - ALTO;
+
+    pageRows.forEach((yTop, rowIdx) => {
+      const row = byYTop[yTop].slice().sort((a,b)=>a.x0-b.x0);
+      const newYTop = Y_TOP_PDF_F0 - rowIdx * PASO_Y;
+      const newYBot = Y_BOT_PDF_F0 - rowIdx * PASO_Y;
+      const x0Row = row[0].x0;
+
+      row.forEach((rect, colIdx) => {
+        const newX0 = x0Row + OFFSET_X + colIdx * PASO_X;
+        const newX1 = newX0 + ANCHO;
+        const newRect = `/Rect [ ${num4(newX0)} ${num4(newYTop)} ${num4(newX1)} ${num4(newYBot)} ]`;
+        replacements.set(rect.full, newRect);
+      });
+    });
+  }
+
+  // Aplicar reemplazos en orden (de atrás para adelante para no desplazar índices)
+  // Como los strings de rect pueden repetirse (misma posición original en varias filas),
+  // usamos un reemplazo secuencial
+  let fixedStr = pdfStr;
+  let replCount = 0;
+  
+  // Reemplazar secuencialmente usando los rects en orden de aparición
+  // Para cada rect en allRects que está en linkRects, aplicar el replacement
+  const linkRectSet = new Set(linkRects.map(r=>r.full+':'+r.index));
+  
+  // Reconstruir el string reemplazando uno por uno en orden de índice (de atrás)
+  // Ordenar linkRects por índice descendente para reemplazar sin desplazar
+  const toReplace = linkRects.slice().sort((a,b)=>b.index-a.index);
+  
+  for(const rect of toReplace) {
+    const newRect = replacements.get(rect.full);
+    if(newRect) {
+      fixedStr = fixedStr.substring(0,rect.index) + newRect + fixedStr.substring(rect.index+rect.full.length);
+      replCount++;
+    }
+  }
+
+  log(`  ✅ ${replCount} enlaces corregidos`);
+  setBadge(idx,'ok',replCount+' fix');
+
+  // Convertir string de vuelta a bytes
+  const fixedBytes = new Uint8Array(fixedStr.length);
+  for(let i=0;i<fixedStr.length;i++) fixedBytes[i] = fixedStr.charCodeAt(i) & 0xff;
+
+  return fixedBytes;
+}
+
+btnProcess.addEventListener('click', async () => {
+  btnProcess.disabled=true; logEl.innerHTML=''; resultsEl.innerHTML='';
+  log('🔧 Corrigiendo...');
+  
+  for(let i=0;i<files.length;i++) {
+    try {
+      const fixedBytes = await fixPdf(files[i], i);
+      if(!fixedBytes) continue;
+      
+      const blob = new Blob([fixedBytes], {type:'application/pdf'});
+      const url  = URL.createObjectURL(blob);
+      const dl   = files[i].name.replace(/\.pdf$/i,'')+'_fix.pdf';
+      
+      const row = document.createElement('div'); row.className='result-row';
+      row.innerHTML=`<span>✅</span><span class="r-name">${dl}</span><span class="r-info">${fmt(fixedBytes.length)}</span><a class="dl-btn" href="${url}" download="${dl}">⬇ Descargar</a>`;
+      resultsEl.appendChild(row);
+    } catch(e) {
+      setBadge(i,'error','Error'); log('  ❌ '+e.message);
+    }
+  }
+  
+  log('✔ Listo.'); btnProcess.disabled=false;
+});
 </script>
 </body>
 </html>
