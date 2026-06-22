@@ -103,12 +103,28 @@
         logEl=document.getElementById('log'), resultsEl=document.getElementById('results');
   let files=[];
 
-  // PDF usa Y desde ABAJO. Coordenadas calibradas en sistema PDF nativo:
-  // X: primera foto x0=949pt, paso=28.1pt, ancho=22.5pt
-  // Y: fila 1 → y0(bottom)=564.56, y1(top)=589.22
-  //    cada fila siguiente RESTA 32.33pt (bajar en pantalla = restar en PDF)
-  const X0=949.0, PASO_X=28.1, W=22.5;
-  const PDF_Y0_F1=564.56, PDF_Y1_F1=589.22, PASO_Y=32.33;
+  // ── LÓGICA DE CORRECCIÓN ────────────────────────────────────────────────────
+  //
+  // PROBLEMA: los links están corridos a la izquierda respecto a los thumbnails.
+  // El sistema de reportes genera los links con:
+  //   - paso entre links: 25.5pt
+  //   - x_inicio: varía según el ancho de la columna FOTOS de cada PDF
+  //
+  // Los thumbnails reales tienen:
+  //   - paso entre thumbs: 27.5pt (más separado)
+  //   - x_inicio = x_primer_link_de_fila + OFFSET_X_FIJO
+  //
+  // OFFSET_X_FIJO = 86pt (constante medida en múltiples PDFs del mismo sistema)
+  // PASO_THUMB    = 27.5pt
+  // ANCHO_LINK    = 22.5pt (se mantiene)
+  //
+  // Para Y: el sistema PDF usa Y=0 en la parte inferior de la página.
+  // Los links originales tienen el Y correcto en Y (centrados sobre las fotos),
+  // NO se modifica el Y — solo se corrige X.
+
+  const OFFSET_X = 86.0;   // offset fijo: primer link → primer thumbnail
+  const PASO_X   = 27.5;   // paso real entre thumbnails
+  const ANCHO    = 22.5;   // ancho del área clickeable
 
   function fmt(b){ return b<1024?b+' B':b<1048576?(b/1024).toFixed(1)+' KB':(b/1048576).toFixed(1)+' MB'; }
   function log(m){ logEl.style.display='block'; logEl.innerHTML+=m+'<br>'; logEl.scrollTop=logEl.scrollHeight; }
@@ -149,6 +165,7 @@
       const annots=pdfDoc.context.lookup(aRef);
       if(!annots||typeof annots.get!=='function') continue;
 
+      // Recolectar links agrupados por fila (mismo Y)
       const byRow={};
       for(let a=0;a<annots.size();a++){
         const ann=pdfDoc.context.lookup(annots.get(a));
@@ -159,29 +176,31 @@
         if(!rObj) continue;
         const rect=pdfDoc.context.lookup(rObj);
         if(!rect) continue;
-        // rect[1] = y_bottom en coords PDF (desde abajo)
-        // Agrupar por y_bottom redondeado
-        const key=Math.round(rect.get(1).numberValue);
+        const key=Math.round(rect.get(1).numberValue);  // agrupar por Y (coords PDF)
         if(!byRow[key]) byRow[key]=[];
         byRow[key].push(rect);
       }
 
-      // Ordenar filas por Y descendente (mayor Y = más arriba en pantalla)
-      const sortedRows=Object.keys(byRow).map(Number).sort((a,b)=>b-a);
-      sortedRows.forEach((key,rowIdx)=>{
+      for(const key of Object.keys(byRow)){
         const row=byRow[key];
+        // Ordenar por X para mantener el orden correcto
         row.sort((a,b)=>a.get(0).numberValue-b.get(0).numberValue);
-        const newY0=PDF_Y0_F1 - rowIdx*PASO_Y;  // restar = bajar en pantalla
-        const newY1=PDF_Y1_F1 - rowIdx*PASO_Y;
-        row.forEach((rect,colIdx)=>{
-          rect.set(0,PDFNumber.of(X0+colIdx*PASO_X));
-          rect.set(2,PDFNumber.of(X0+colIdx*PASO_X+W));
-          rect.set(1,PDFNumber.of(newY0));
-          rect.set(3,PDFNumber.of(newY1));
+
+        // X del primer link de esta fila (referencia dinámica)
+        const x0_link = row[0].get(0).numberValue;
+        // X del primer thumbnail = x0_link + OFFSET_X
+        const x0_thumb = x0_link + OFFSET_X;
+
+        row.forEach((rect,i)=>{
+          const newX0 = x0_thumb + i * PASO_X;
+          const newX1 = newX0 + ANCHO;
+          // Y no se modifica — ya está sobre las fotos
+          rect.set(0, PDFNumber.of(newX0));
+          rect.set(2, PDFNumber.of(newX1));
           total++;
         });
-        log(`  → fila ${rowIdx+1}: ${row.length} enlaces → y0=${newY0.toFixed(1)}`);
-      });
+        log(`  → fila y≈${key}: ${row.length} enlaces  x_base=${x0_thumb.toFixed(1)}`);
+      }
     }
 
     if(!total){ log('  ℹ️ Sin links'); setBadge(idx,'ok','Sin cambios'); }
