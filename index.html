@@ -92,21 +92,17 @@
 </div>
 
 <script>
-// ── CORRECCIÓN VÍA REGEX EN EL STREAM RAW DEL PDF ─────────────────────────
-// La app manipula el PDF como texto, reemplazando directamente los /Rect
-// en el stream de anotaciones. Esto evita completamente las ambigüedades
-// de índices de pdf-lib y funciona con 0pt de error (verificado en Python).
-//
-// Parámetros calibrados (constantes universales del sistema de reportes JGO):
-// OFFSET_X = 86pt (primer link → primer thumbnail en X)
-// PASO_X   = 27.5pt (paso real entre thumbnails)  
-// ANCHO    = 22.5pt (ancho del área clickeable)
-// OFFSET_Y = 15.81pt (primer link → primer thumbnail en Y, visual desde arriba)
-// PASO_Y   = 32.33pt (paso real entre filas de thumbnails)
-// ALTO     = 24.67pt (alto del thumbnail)
+// ── PARÁMETROS CALIBRADOS (constantes universales del sistema de reportes JGO) ──
+// Verificados pixel a pixel en GGZ (4 filas) y SYNTSN (58 filas) con 0pt de error.
+// La corrección opera sobre el stream raw del PDF para evitar ambigüedades de librerías.
+// El PDF guarda /Rect [x0 y_top_pdf x1 y_bot_pdf] donde y_top > y_bot (Y crece hacia arriba).
 
-const OFFSET_X = 86.0, PASO_X = 27.5, ANCHO = 22.5;
-const OFFSET_Y = 15.81, PASO_Y = 32.33, ALTO = 24.67;
+const OFFSET_X = 86.0;   // offset X: primer link → primer thumbnail
+const PASO_X   = 27.5;   // paso real entre thumbnails en X
+const ANCHO    = 22.5;   // ancho del área clickeable
+const OFFSET_Y = 15.81;  // offset Y: link_y_top_pdf → thumb_y_top_pdf (restar)
+const PASO_Y   = 32.33;  // paso real entre filas de thumbnails (en coords PDF)
+const ALTO     = 24.67;  // alto del thumbnail
 
 const dropZone   = document.getElementById('drop-zone');
 const fileInput  = document.getElementById('file-input');
@@ -119,6 +115,7 @@ let files = [];
 function fmt(b) { return b<1024?b+' B':b<1048576?(b/1024).toFixed(1)+' KB':(b/1048576).toFixed(1)+' MB'; }
 function log(m) { logEl.style.display='block'; logEl.innerHTML+=m+'<br>'; logEl.scrollTop=logEl.scrollHeight; }
 function setBadge(i,t,x) { const b=document.getElementById('badge-'+i); if(b){b.className='badge badge-'+t;b.textContent=x;} }
+function num4(n) { return n.toFixed(4); }
 
 function renderList() {
   fileList.innerHTML='';
@@ -143,180 +140,147 @@ dropZone.addEventListener('dragover',e=>{e.preventDefault();dropZone.classList.a
 dropZone.addEventListener('dragleave',()=>dropZone.classList.remove('dragover'));
 dropZone.addEventListener('drop',e=>{e.preventDefault();dropZone.classList.remove('dragover');addFiles(e.dataTransfer.files);});
 
-// ── LÓGICA DE CORRECCIÓN ────────────────────────────────────────────────────
-
-function num4(n) { return n.toFixed(4); }
-
 async function fixPdf(file, idx) {
   setBadge(idx,'working','Procesando…');
   log('📄 '+file.name);
 
-  // Leer el PDF como ArrayBuffer
   const buf = await file.arrayBuffer();
   const bytes = new Uint8Array(buf);
 
-  // Decodificar a string (el PDF es mayormente ASCII/Latin1)
-  let pdfStr = '';
-  for(let i=0;i<bytes.length;i++) pdfStr += String.fromCharCode(bytes[i]);
+  // Convertir SOLO la zona de texto del PDF (antes del primer stream binario).
+  // Los /Rect de links siempre están en la cabecera del PDF, antes de los streams.
+  // Buscamos "stream
+" o "stream
+" para encontrar el límite.
+  let firstStreamByte = bytes.length;
+  for(let i=0; i<Math.min(bytes.length-7, 200000); i++) {
+    // Buscar b'stream
+' o b'stream
+'
+    if(bytes[i]===115&&bytes[i+1]===116&&bytes[i+2]===114&&bytes[i+3]===101&&bytes[i+4]===97&&bytes[i+5]===109) {
+      if(bytes[i+6]===10||bytes[i+6]===13) {
+        firstStreamByte = i;
+        break;
+      }
+    }
+  }
 
-  // Encontrar todas las páginas y sus /Annots con /Rect
-  // Parsear los /Rect de todos los links de una vez
-  // Formato: /Rect [ x0 y1 x1 y0 ] (y1 > y0 en este sistema, y1=y_top_pdf)
+  // Decodificar solo la parte de texto (headers + objetos)
+  let textPart = '';
+  for(let i=0;i<firstStreamByte;i++) textPart += String.fromCharCode(bytes[i]);
 
-  // Extraer todos los /Rect existentes con sus posiciones en el string
-  const rectRegex = /\/Rect \[ ([\d\.\-]+) ([\d\.\-]+) ([\d\.\-]+) ([\d\.\-]+) \]/g;
-  
-  // Primero, recolectar todos los rects
+  // Regex: /Rect\s*\[\s*num\s+num\s+num\s+num\s*\]
+  // Formato real en el PDF: /Rect [832.2578740157481434 605.0266572342519567 ...]
+  const rectRegex = /\/Rect\s*\[\s*([\d\.]+)\s+([\d\.]+)\s+([\d\.]+)\s+([\d\.]+)\s*\]/g;
+
+  // Recolectar todos los /Rect con sus posiciones en textPart
   const allRects = [];
   let m;
-  rectRegex.lastIndex = 0;
-  while((m = rectRegex.exec(pdfStr)) !== null) {
-    allRects.push({
-      index: m.index,
-      full: m[0],
-      x0: parseFloat(m[1]),
-      y1: parseFloat(m[2]),  // valor de índice [1]: y_top_pdf (mayor)
-      x1: parseFloat(m[3]),
-      y0: parseFloat(m[4]),  // valor de índice [3]: y_bot_pdf (menor)
-    });
+  while((m = rectRegex.exec(textPart)) !== null) {
+    const x0=parseFloat(m[1]), yTop=parseFloat(m[2]), x1=parseFloat(m[3]), yBot=parseFloat(m[4]);
+    // Solo links: yTop > yBot (PDF coords, Y crece hacia arriba)
+    if(yTop > yBot && x1 > x0) {
+      allRects.push({ pos:m.index, full:m[0], x0, yTop, x1, yBot });
+    }
   }
 
   if(!allRects.length) {
-    log('  ℹ️ Sin anotaciones'); setBadge(idx,'ok','Sin cambios');
+    log('  ℹ️ Sin enlaces'); setBadge(idx,'ok','Sin cambios');
     return null;
   }
+  log(`  → ${allRects.length} enlaces encontrados`);
 
-  // Agrupar por página: los rects de la misma página tienen y_top_pdf similares
-  // Detectar saltos de página: cuando y_top_pdf salta mucho (reset de Y)
-  // Simplemente procesamos todas las filas en conjunto ordenadas por y_top_pdf desc
-  
-  // Separar los rects de MediaBox/otros vs los de links
-  // Los links tienen y_top > y_bot siempre (en este PDF)
-  const linkRects = allRects.filter(r => r.y1 > r.y0 && r.x1 > r.x0);
-
-  log(`  → ${linkRects.length} enlaces encontrados`);
-
-  // Agrupar por página: detectar grupos separados por saltos de Y grandes
-  // Dentro de una página los rects están ordenados con y_top_pdf valores similares por fila
-  // Agrupamos por "página" = secuencias donde no hay salto grande de y_top_pdf entre filas consecutivas
-  
-  // Agrupar todos los rects por su y_top_pdf redondeado (= fila)
-  const byYTop = {};
-  for(const r of linkRects) {
-    const key = Math.round(r.y1 * 10) / 10;  // redondear a 1 decimal
-    if(!byYTop[key]) byYTop[key] = [];
-    byYTop[key].push(r);
+  // Agrupar por fila: rects con el mismo yTop (redondeado) = misma fila
+  const byRow = {};
+  for(const r of allRects) {
+    const key = Math.round(r.yTop * 100) / 100;
+    if(!byRow[key]) byRow[key]=[];
+    byRow[key].push(r);
   }
 
-  // Detectar páginas: las filas de una misma página tienen y_top_pdf consecutivos
-  // Cuando hay un salto grande (>50pt) entre filas → nueva página
-  const sortedYTops = Object.keys(byYTop).map(Number).sort((a,b)=>b-a);  // desc
-  
-  // Dividir en grupos de página
+  // Detectar grupos de página: filas consecutivas con salto < 80pt entre ellas
+  // (salto > 80pt en coords PDF = nueva página)
+  const sortedYTops = Object.keys(byRow).map(Number).sort((a,b)=>b-a); // desc
+
   const pageGroups = [];
-  let currentGroup = [sortedYTops[0]];
+  let cur = [sortedYTops[0]];
   for(let i=1;i<sortedYTops.length;i++) {
     const diff = sortedYTops[i-1] - sortedYTops[i];
-    if(diff > 80) {  // salto > 80pt = nueva página
-      pageGroups.push([...currentGroup]);
-      currentGroup = [sortedYTops[i]];
-    } else {
-      currentGroup.push(sortedYTops[i]);
-    }
+    if(diff > 80) { pageGroups.push([...cur]); cur=[sortedYTops[i]]; }
+    else cur.push(sortedYTops[i]);
   }
-  pageGroups.push(currentGroup);
+  pageGroups.push(cur);
+  log(`  → ${pageGroups.length} página(s)`);
 
-  log(`  → ${pageGroups.length} página(s) detectadas`);
-
-  // Para cada grupo de página, calcular las correcciones
-  // Mapa: rect_original_string → rect_nuevo_string
-  const replacements = new Map();
+  // Para cada página, calcular los nuevos /Rect
+  // Mapa posición → nuevo string
+  const replacements = new Map(); // pos → newRectStr
 
   for(const pageRows of pageGroups) {
-    // pageRows está ordenado desc (primera fila = mayor y_top_pdf = más arriba visual)
-    // La primera fila es la de índice 0
-    const firstRowYTop = pageRows[pageRows.length-1];  // menor y_top_pdf = primera fila visual... 
-    // WAIT: mayor y_top_pdf = más arriba en PDF = más arriba visual
-    // pageRows[0] = mayor y_top_pdf = fila 1 (más arriba)
-    const firstRowLinks = byYTop[pageRows[0]];
-    
-    // y_top_vis de la primera fila = H - y_top_pdf_fila0
-    // Pero no sabemos H por página en el PDF raw
-    // Lo que SÍ sabemos: y_top_pdf del primer link de fila 0
-    // y el offset visual es OFFSET_Y = 15.81pt
-    // En PDF coords: nuevo y_top_pdf = y_top_pdf_link0 - OFFSET_Y
-    const y_top_pdf_link0 = firstRowLinks[0].y1;  // y_top_pdf de fila 0
-    const Y_TOP_PDF_F0 = y_top_pdf_link0 - OFFSET_Y;
-    const Y_BOT_PDF_F0 = Y_TOP_PDF_F0 - ALTO;
+    // pageRows ordenado desc: pageRows[0] = fila más arriba (mayor yTop_pdf)
+    const firstRowRects = byRow[pageRows[0]];
+    const yTop0 = firstRowRects[0].yTop;  // yTop_pdf del primer link de fila 0
 
-    pageRows.forEach((yTop, rowIdx) => {
-      const row = byYTop[yTop].slice().sort((a,b)=>a.x0-b.x0);
-      const newYTop = Y_TOP_PDF_F0 - rowIdx * PASO_Y;
-      const newYBot = Y_BOT_PDF_F0 - rowIdx * PASO_Y;
-      const x0Row = row[0].x0;
+    // Nuevo yTop_pdf de fila 0 = yTop0 - OFFSET_Y
+    const Y_TOP_F0 = yTop0 - OFFSET_Y;
+    const Y_BOT_F0 = Y_TOP_F0 - ALTO;
+
+    pageRows.forEach((yTopKey, rowIdx) => {
+      const row = byRow[yTopKey].slice().sort((a,b)=>a.x0-b.x0);
+      const x0Row = row[0].x0;  // x0 del primer link de esta fila
+
+      const newYTop = Y_TOP_F0 - rowIdx * PASO_Y;
+      const newYBot = Y_BOT_F0 - rowIdx * PASO_Y;
 
       row.forEach((rect, colIdx) => {
         const newX0 = x0Row + OFFSET_X + colIdx * PASO_X;
         const newX1 = newX0 + ANCHO;
-        const newRect = `/Rect [ ${num4(newX0)} ${num4(newYTop)} ${num4(newX1)} ${num4(newYBot)} ]`;
-        replacements.set(rect.full, newRect);
+        // Mismo formato que el original: /Rect [x0 yTop x1 yBot]
+        const newStr = `/Rect [${num4(newX0)} ${num4(newYTop)} ${num4(newX1)} ${num4(newYBot)}]`;
+        replacements.set(rect.pos, { old: rect.full, new: newStr });
       });
     });
   }
 
-  // Aplicar reemplazos en orden (de atrás para adelante para no desplazar índices)
-  // Como los strings de rect pueden repetirse (misma posición original en varias filas),
-  // usamos un reemplazo secuencial
-  let fixedStr = pdfStr;
-  let replCount = 0;
-  
-  // Reemplazar secuencialmente usando los rects en orden de aparición
-  // Para cada rect en allRects que está en linkRects, aplicar el replacement
-  const linkRectSet = new Set(linkRects.map(r=>r.full+':'+r.index));
-  
-  // Reconstruir el string reemplazando uno por uno en orden de índice (de atrás)
-  // Ordenar linkRects por índice descendente para reemplazar sin desplazar
-  const toReplace = linkRects.slice().sort((a,b)=>b.index-a.index);
-  
-  for(const rect of toReplace) {
-    const newRect = replacements.get(rect.full);
-    if(newRect) {
-      fixedStr = fixedStr.substring(0,rect.index) + newRect + fixedStr.substring(rect.index+rect.full.length);
-      replCount++;
-    }
+  // Aplicar reemplazos de atrás hacia adelante (para no desplazar posiciones)
+  const toReplace = [...replacements.entries()].sort((a,b)=>b[0]-a[0]);
+  let fixedText = textPart;
+  let count = 0;
+  for(const [pos, rep] of toReplace) {
+    fixedText = fixedText.substring(0, pos) + rep.new + fixedText.substring(pos + rep.old.length);
+    count++;
   }
 
-  log(`  ✅ ${replCount} enlaces corregidos`);
-  setBadge(idx,'ok',replCount+' fix');
+  log(`  ✅ ${count} enlaces corregidos`);
+  setBadge(idx,'ok',count+' fix');
 
-  // Convertir string de vuelta a bytes
-  const fixedBytes = new Uint8Array(fixedStr.length);
-  for(let i=0;i<fixedStr.length;i++) fixedBytes[i] = fixedStr.charCodeAt(i) & 0xff;
+  // Recombinar: texto corregido + resto binario sin cambios
+  const fixedTextBytes = new Uint8Array(fixedText.length);
+  for(let i=0;i<fixedText.length;i++) fixedTextBytes[i]=fixedText.charCodeAt(i)&0xff;
 
-  return fixedBytes;
+  const restBytes = bytes.slice(firstStreamByte);
+  const combined = new Uint8Array(fixedTextBytes.length + restBytes.length);
+  combined.set(fixedTextBytes, 0);
+  combined.set(restBytes, fixedTextBytes.length);
+
+  return combined;
 }
 
 btnProcess.addEventListener('click', async () => {
   btnProcess.disabled=true; logEl.innerHTML=''; resultsEl.innerHTML='';
   log('🔧 Corrigiendo...');
-  
   for(let i=0;i<files.length;i++) {
     try {
-      const fixedBytes = await fixPdf(files[i], i);
-      if(!fixedBytes) continue;
-      
-      const blob = new Blob([fixedBytes], {type:'application/pdf'});
+      const fixed = await fixPdf(files[i], i);
+      if(!fixed) continue;
+      const blob = new Blob([fixed], {type:'application/pdf'});
       const url  = URL.createObjectURL(blob);
       const dl   = files[i].name.replace(/\.pdf$/i,'')+'_fix.pdf';
-      
-      const row = document.createElement('div'); row.className='result-row';
-      row.innerHTML=`<span>✅</span><span class="r-name">${dl}</span><span class="r-info">${fmt(fixedBytes.length)}</span><a class="dl-btn" href="${url}" download="${dl}">⬇ Descargar</a>`;
+      const row  = document.createElement('div'); row.className='result-row';
+      row.innerHTML=`<span>✅</span><span class="r-name">${dl}</span><span class="r-info">${fmt(fixed.length)}</span><a class="dl-btn" href="${url}" download="${dl}">⬇ Descargar</a>`;
       resultsEl.appendChild(row);
-    } catch(e) {
-      setBadge(i,'error','Error'); log('  ❌ '+e.message);
-    }
+    } catch(e) { setBadge(i,'error','Error'); log('  ❌ '+e.message); }
   }
-  
   log('✔ Listo.'); btnProcess.disabled=false;
 });
 </script>
