@@ -103,11 +103,12 @@
         logEl=document.getElementById('log'), resultsEl=document.getElementById('results');
   let files=[];
 
-  // Coordenadas calibradas pixel-a-pixel sobre PDF real (A4 landscape 1190x841pt)
-  // X: primera foto en x=949pt, paso=28.1pt, ancho=22.5pt
-  // Y: primera fila en y=252.67pt, paso=32.33pt, alto=24.67pt (tamaño real del thumb)
+  // PDF usa Y desde ABAJO. Coordenadas calibradas en sistema PDF nativo:
+  // X: primera foto x0=949pt, paso=28.1pt, ancho=22.5pt
+  // Y: fila 1 → y0(bottom)=564.56, y1(top)=589.22
+  //    cada fila siguiente RESTA 32.33pt (bajar en pantalla = restar en PDF)
   const X0=949.0, PASO_X=28.1, W=22.5;
-  const Y0=252.67, PASO_Y=32.33, H=24.67;
+  const PDF_Y0_F1=564.56, PDF_Y1_F1=589.22, PASO_Y=32.33;
 
   function fmt(b){ return b<1024?b+' B':b<1048576?(b/1024).toFixed(1)+' KB':(b/1048576).toFixed(1)+' MB'; }
   function log(m){ logEl.style.display='block'; logEl.innerHTML+=m+'<br>'; logEl.scrollTop=logEl.scrollHeight; }
@@ -148,7 +149,6 @@
       const annots=pdfDoc.context.lookup(aRef);
       if(!annots||typeof annots.get!=='function') continue;
 
-      // Agrupar links por fila (Y original)
       const byRow={};
       for(let a=0;a<annots.size();a++){
         const ann=pdfDoc.context.lookup(annots.get(a));
@@ -159,18 +159,20 @@
         if(!rObj) continue;
         const rect=pdfDoc.context.lookup(rObj);
         if(!rect) continue;
+        // rect[1] = y_bottom en coords PDF (desde abajo)
+        // Agrupar por y_bottom redondeado
         const key=Math.round(rect.get(1).numberValue);
         if(!byRow[key]) byRow[key]=[];
         byRow[key].push(rect);
       }
 
-      // Ordenar filas por Y y reasignar posición exacta por índice
-      const sortedRows=Object.keys(byRow).map(Number).sort((a,b)=>a-b);
+      // Ordenar filas por Y descendente (mayor Y = más arriba en pantalla)
+      const sortedRows=Object.keys(byRow).map(Number).sort((a,b)=>b-a);
       sortedRows.forEach((key,rowIdx)=>{
         const row=byRow[key];
         row.sort((a,b)=>a.get(0).numberValue-b.get(0).numberValue);
-        const newY0=Y0+rowIdx*PASO_Y;
-        const newY1=newY0+H;
+        const newY0=PDF_Y0_F1 - rowIdx*PASO_Y;  // restar = bajar en pantalla
+        const newY1=PDF_Y1_F1 - rowIdx*PASO_Y;
         row.forEach((rect,colIdx)=>{
           rect.set(0,PDFNumber.of(X0+colIdx*PASO_X));
           rect.set(2,PDFNumber.of(X0+colIdx*PASO_X+W));
@@ -178,7 +180,7 @@
           rect.set(3,PDFNumber.of(newY1));
           total++;
         });
-        log(`  → fila ${rowIdx+1}: ${row.length} enlaces → y=${newY0.toFixed(1)}`);
+        log(`  → fila ${rowIdx+1}: ${row.length} enlaces → y0=${newY0.toFixed(1)}`);
       });
     }
 
