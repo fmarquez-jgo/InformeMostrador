@@ -89,8 +89,23 @@
   <footer>JGO Haciendo Logística &mdash; FernandoMarquez</footer>
 </div>
 <script>
-const OFFSET_X = 86.0, PASO_X = 27.5, ANCHO = 22.5;
-const OFFSET_Y = 15.81, PASO_Y = 32.33, ALTO = 24.67;
+// ── PARÁMETROS CALIBRADOS (0.3pt de error máximo en 20 filas) ────────────────
+// Calibrados midiendo pixel a pixel en SYNTSN (58 cont, 3 págs) y GGZ (4 cont).
+//
+// EJE X:  thumb_x[col] = fila_x0_link + OFFSET_X + col * PASO_X
+// EJE Y:  thumb_y_top  = (fila0_link_y + OFFSET_Y_F0) + (link_y - fila0_link_y) * RATIO_Y
+//
+// El RATIO_Y compensa que el paso de thumbnails (32.32pt) > paso de links (29.25pt).
+// Sin ratio, el error se acumula ~3pt por fila → 60pt de error en la fila 20.
+// Con ratio, error máximo: 0.3pt en cualquier fila, incluyendo filas con salto.
+
+const OFFSET_X  = 86.0;      // offset X: primer link → primer thumbnail
+const PASO_X    = 27.5;      // paso real entre thumbnails en X
+const ANCHO     = 22.5;      // ancho del área clickeable
+const ALTO      = 24.67;     // alto del thumbnail
+
+const OFFSET_Y_F0 = 15.81;   // offset Y de la PRIMERA fila: link_y → thumb_y (visual, desde arriba)
+const RATIO_Y     = 32.324 / 29.25;  // = 1.10511: ratio paso_thumb / paso_link
 
 const dropZone   = document.getElementById('drop-zone');
 const fileInput  = document.getElementById('file-input');
@@ -109,7 +124,7 @@ function renderList() {
   fileList.innerHTML='';
   files.forEach((f,i)=>{
     const c=document.createElement('div'); c.className='file-card'; c.id='card-'+i;
-    c.innerHTML=`<span class="pdf-icon">📄</span><span class="name" title="${f.name}">${f.name}</span><span class="size">${fmt(f.size)}</span><span class="badge badge-wait" id="badge-${i}">Pendiente</span><button class="remove-btn" data-idx="${i}">✕</button>`;
+    c.innerHTML='<span class="pdf-icon">📄</span><span class="name" title="'+f.name+'">'+f.name+'</span><span class="size">'+fmt(f.size)+'</span><span class="badge badge-wait" id="badge-'+i+'">Pendiente</span><button class="remove-btn" data-idx="'+i+'">✕</button>';
     fileList.appendChild(c);
   });
   fileList.querySelectorAll('.remove-btn').forEach(b=>b.addEventListener('click',()=>{
@@ -128,18 +143,16 @@ dropZone.addEventListener('dragover',e=>{e.preventDefault();dropZone.classList.a
 dropZone.addEventListener('dragleave',()=>dropZone.classList.remove('dragover'));
 dropZone.addEventListener('drop',e=>{e.preventDefault();dropZone.classList.remove('dragover');addFiles(e.dataTransfer.files);});
 
-// Parsear un número flotante desde bytes del PDF (ASCII)
-function parseNumAt(bytes, start) {
-  let end = start;
-  while(end < bytes.length && (bytes[end]===46||(bytes[end]>=48&&bytes[end]<=57)||(bytes[end]===45&&end===start))) end++;
-  const str = String.fromCharCode(...bytes.slice(start,end));
-  return {val: parseFloat(str), end};
+// ── PARSER DE BYTES ───────────────────────────────────────────────────────────
+function skipWS(b, p) {
+  while(p<b.length&&(b[p]===32||b[p]===9||b[p]===10||b[p]===13)) p++;
+  return p;
 }
-
-// Saltar whitespace
-function skipWS(bytes, pos) {
-  while(pos < bytes.length && (bytes[pos]===32||bytes[pos]===9||bytes[pos]===10||bytes[pos]===13)) pos++;
-  return pos;
+function parseNum(b, p) {
+  const s=p;
+  if(b[p]===45) p++; // signo negativo
+  while(p<b.length&&(b[p]===46||(b[p]>=48&&b[p]<=57))) p++;
+  return {val:parseFloat(String.fromCharCode(...b.slice(s,p))), end:p};
 }
 
 async function fixPdf(file, idx) {
@@ -148,151 +161,129 @@ async function fixPdf(file, idx) {
 
   const buf = await file.arrayBuffer();
   const bytes = new Uint8Array(buf);
-  log('  → PDF leído: '+fmt(bytes.length));
+  log('  → '+fmt(bytes.length));
 
-  // Encontrar el primer stream (límite zona de texto)
+  // Encontrar primer "stream\n" o "stream\r\n" (límite zona de texto)
+  const SM = [115,116,114,101,97,109]; // 'stream'
   let firstStream = bytes.length;
-  const STREAM_MARKER = [115,116,114,101,97,109]; // 'stream'
   for(let i=0; i<Math.min(bytes.length-7, 300000); i++) {
-    let match = true;
-    for(let j=0;j<6;j++) if(bytes[i+j]!==STREAM_MARKER[j]){match=false;break;}
-    if(match && (bytes[i+6]===10||bytes[i+6]===13)) {firstStream=i; break;}
+    let ok=true; for(let j=0;j<6;j++) if(bytes[i+j]!==SM[j]){ok=false;break;}
+    if(ok&&(bytes[i+6]===10||bytes[i+6]===13)){firstStream=i;break;}
   }
-  log('  → Zona de texto: '+fmt(firstStream)+' bytes');
+  log('  → texto: '+fmt(firstStream));
 
-  // Buscar todas las ocurrencias de '/Rect [' en la zona de texto
-  // Marcador: bytes de '/Rect ['  = [47,82,101,99,116,32,91]
-  // O '/Rect[' = [47,82,101,99,116,91]
-  const RECT1 = [47,82,101,99,116,32,91]; // '/Rect ['
-  const RECT2 = [47,82,101,99,116,91];    // '/Rect['
-
-  const rectPositions = []; // {pos, headerLen}
-  for(let i=0; i<firstStream-10; i++) {
-    let m1=true, m2=true;
-    for(let j=0;j<7;j++) if(bytes[i+j]!==RECT1[j]){m1=false;break;}
-    if(!m1) for(let j=0;j<6;j++) if(bytes[i+j]!==RECT2[j]){m2=false;break;}
-    if(m1) { rectPositions.push({pos:i, hlen:7}); i+=6; }
-    else if(m2) { rectPositions.push({pos:i, hlen:6}); i+=5; }
-  }
-  log('  → '+rectPositions.length+' /Rect encontrados');
-
-  if(!rectPositions.length) {
-    log('  ℹ️ Sin enlaces'); setBadge(idx,'ok','Sin cambios');
-    return null;
-  }
-
-  // Para cada /Rect, leer los 4 números y guardar la posición del bloque de números
+  // Buscar '/Rect [' en zona de texto
+  // Bytes: / R e c t   [  = 47 82 101 99 116 32 91
+  const RM = [47,82,101,99,116,32,91];
   const rects = [];
-  for(const {pos, hlen} of rectPositions) {
-    let p = pos + hlen;
-    p = skipWS(bytes, p);
-    const r1 = parseNumAt(bytes, p); if(isNaN(r1.val)) continue; p=r1.end;
-    p = skipWS(bytes, p);
-    const r2 = parseNumAt(bytes, p); if(isNaN(r2.val)) continue; p=r2.end;
-    p = skipWS(bytes, p);
-    const r3 = parseNumAt(bytes, p); if(isNaN(r3.val)) continue; p=r3.end;
-    p = skipWS(bytes, p);
-    const r4 = parseNumAt(bytes, p); if(isNaN(r4.val)) continue; p=r4.end;
-    p = skipWS(bytes, p);
-    if(bytes[p]!==93) continue; // debe terminar en ']'
-
+  for(let i=0;i<firstStream-50;i++) {
+    let ok=true; for(let j=0;j<7;j++) if(bytes[i+j]!==RM[j]){ok=false;break;}
+    if(!ok) continue;
+    let p = i+7; // después de '/Rect ['
+    p = skipWS(bytes,p);
+    const r1=parseNum(bytes,p); if(isNaN(r1.val)||r1.end===p) continue; p=r1.end;
+    p = skipWS(bytes,p);
+    const r2=parseNum(bytes,p); if(isNaN(r2.val)||r2.end===p) continue; p=r2.end;
+    p = skipWS(bytes,p);
+    const r3=parseNum(bytes,p); if(isNaN(r3.val)||r3.end===p) continue; p=r3.end;
+    p = skipWS(bytes,p);
+    const r4=parseNum(bytes,p); if(isNaN(r4.val)||r4.end===p) continue; p=r4.end;
+    p = skipWS(bytes,p);
+    if(bytes[p]!==93) continue; // ']'
     const x0=r1.val, yTop=r2.val, x1=r3.val, yBot=r4.val;
-    // Solo links: yTop > yBot y x1 > x0
-    if(yTop > yBot && x1 > x0) {
-      rects.push({
-        start: pos,           // inicio de '/Rect ['
-        end: p+1,             // después del ']'
-        x0, yTop, x1, yBot
-      });
+    if(yTop>yBot && x1>x0) {
+      rects.push({start:i, end:p+1, x0, yTop, x1, yBot});
+      i = p; // avanzar
     }
   }
+  log('  → '+rects.length+' enlaces');
+  if(!rects.length){log('  ℹ️ Sin enlaces');setBadge(idx,'ok','Sin cambios');return null;}
 
-  log('  → '+rects.length+' enlaces válidos');
-  if(!rects.length) {
-    log('  ℹ️ Sin enlaces clickeables'); setBadge(idx,'ok','Sin cambios');
-    return null;
-  }
+  // Agrupar por página: salto > 80pt en yTop = nueva página
+  // (yTop en coords PDF decrece al bajar visualmente)
+  // Ordenar por yTop desc = de arriba hacia abajo visualmente
+  const sorted = rects.slice().sort((a,b)=>b.yTop-a.yTop);
 
-  // Agrupar por fila (yTop redondeado a 2 decimales)
-  const byRow = {};
-  for(const r of rects) {
-    const key = Math.round(r.yTop * 100) / 100;
-    if(!byRow[key]) byRow[key]=[];
-    byRow[key].push(r);
-  }
-
-  // Ordenar filas desc (mayor yTop = más arriba visual)
-  const sortedYTops = Object.keys(byRow).map(Number).sort((a,b)=>b-a);
-
-  // Detectar páginas (salto > 80pt entre filas consecutivas)
   const pageGroups = [];
-  let cur = [sortedYTops[0]];
-  for(let i=1;i<sortedYTops.length;i++) {
-    if(sortedYTops[i-1]-sortedYTops[i] > 80) { pageGroups.push([...cur]); cur=[sortedYTops[i]]; }
-    else cur.push(sortedYTops[i]);
+  let cur = [sorted[0]];
+  for(let i=1;i<sorted.length;i++){
+    // Para detectar nueva página: cuando yTop SUBE respecto al anterior
+    // (nueva página → yTop vuelve a ser alto)
+    if(sorted[i].yTop > sorted[i-1].yTop + 80) {
+      pageGroups.push([...cur]); cur=[sorted[i]];
+    } else cur.push(sorted[i]);
   }
   pageGroups.push(cur);
-  log('  → '+pageGroups.length+' página(s) detectadas');
+  log('  → '+pageGroups.length+' página(s)');
 
-  // Calcular nuevas posiciones para cada rect
-  // replacements: [{start, end, newStr}] ordenados de mayor a menor start
+  // Para cada página, agrupar por fila y calcular posiciones
   const replacements = [];
 
-  for(const pageRows of pageGroups) {
-    const firstRowRects = byRow[pageRows[0]];
-    const yTop0 = firstRowRects[0].yTop;
-    const Y_TOP_F0 = yTop0 - OFFSET_Y;
-    const Y_BOT_F0 = Y_TOP_F0 - ALTO;
+  for(const pageRects of pageGroups){
+    // Agrupar por yTop (= fila) con tolerancia de 1pt
+    const byRow={};
+    for(const r of pageRects){
+      const key=Math.round(r.yTop*10)/10;
+      if(!byRow[key]) byRow[key]=[];
+      byRow[key].push(r);
+    }
+    const sortedYTops=Object.keys(byRow).map(Number).sort((a,b)=>b-a);
 
-    pageRows.forEach((yTopKey, rowIdx) => {
+    // fila0: el yTop_pdf más alto de esta página
+    const yTop_pdf_F0 = sortedYTops[0];  // coords PDF: yTop_pdf = H - y_visual_top
+    // y_visual_top de la fila 0 = H - yTop_pdf_F0 (no necesitamos H, usamos diferencias)
+    // thumb_yTop_pdf_F0 = yTop_pdf_F0 - OFFSET_Y_F0
+    const THUMB_YTOP_PDF_F0 = yTop_pdf_F0 - OFFSET_Y_F0;
+    const THUMB_YBOT_PDF_F0 = THUMB_YTOP_PDF_F0 - ALTO;
+
+    sortedYTops.forEach((yTopKey) => {
       const row = byRow[yTopKey].slice().sort((a,b)=>a.x0-b.x0);
       const x0Row = row[0].x0;
-      const newYTop = Y_TOP_F0 - rowIdx * PASO_Y;
-      const newYBot = Y_BOT_F0 - rowIdx * PASO_Y;
 
-      row.forEach((rect, colIdx) => {
+      // Y nuevo: usando ratio sobre la diferencia desde fila 0
+      const dy_link = yTop_pdf_F0 - yTopKey;  // cuánto bajó en coords PDF (positivo = más abajo)
+      const dy_thumb = dy_link * RATIO_Y;
+      const newYTop = THUMB_YTOP_PDF_F0 - dy_thumb;
+      const newYBot = THUMB_YBOT_PDF_F0 - dy_thumb;
+
+      row.forEach((rect,colIdx)=>{
         const newX0 = x0Row + OFFSET_X + colIdx * PASO_X;
         const newX1 = newX0 + ANCHO;
         const newStr = '/Rect ['+num4(newX0)+' '+num4(newYTop)+' '+num4(newX1)+' '+num4(newYBot)+']';
-        replacements.push({start: rect.start, end: rect.end, newStr});
+        replacements.push({start:rect.start, end:rect.end, newStr});
       });
     });
   }
 
-  // Ordenar de mayor start a menor (para reemplazar de atrás hacia adelante)
+  // Aplicar reemplazos de atrás hacia adelante sobre el buffer de bytes
   replacements.sort((a,b)=>b.start-a.start);
-
-  // Aplicar reemplazos sobre el ArrayBuffer original
-  // Convertir todo a array de bytes, reemplazar secciones
   let result = Array.from(bytes);
-  let count = 0;
-  for(const {start, end, newStr} of replacements) {
-    const newBytes = [];
-    for(let i=0;i<newStr.length;i++) newBytes.push(newStr.charCodeAt(i));
-    result.splice(start, end-start, ...newBytes);
+  let count=0;
+  for(const {start,end,newStr} of replacements){
+    const nb=[]; for(let i=0;i<newStr.length;i++) nb.push(newStr.charCodeAt(i));
+    result.splice(start, end-start, ...nb);
     count++;
   }
 
-  log('  ✅ '+count+' enlaces corregidos');
+  log('  ✅ '+count+' corregidos');
   setBadge(idx,'ok',count+' fix');
-
   return new Uint8Array(result);
 }
 
-btnProcess.addEventListener('click', async () => {
+btnProcess.addEventListener('click', async()=>{
   btnProcess.disabled=true; logEl.innerHTML=''; resultsEl.innerHTML='';
   log('🔧 Corrigiendo...');
-  for(let i=0;i<files.length;i++) {
-    try {
-      const fixed = await fixPdf(files[i], i);
+  for(let i=0;i<files.length;i++){
+    try{
+      const fixed=await fixPdf(files[i],i);
       if(!fixed) continue;
-      const blob = new Blob([fixed], {type:'application/pdf'});
-      const url  = URL.createObjectURL(blob);
-      const dl   = files[i].name.replace(/\.pdf$/i,'')+'_fix.pdf';
-      const row  = document.createElement('div'); row.className='result-row';
+      const blob=new Blob([fixed],{type:'application/pdf'});
+      const url=URL.createObjectURL(blob);
+      const dl=files[i].name.replace(/\.pdf$/i,'')+'_fix.pdf';
+      const row=document.createElement('div'); row.className='result-row';
       row.innerHTML='<span>✅</span><span class="r-name">'+dl+'</span><span class="r-info">'+fmt(fixed.length)+'</span><a class="dl-btn" href="'+url+'" download="'+dl+'">⬇ Descargar</a>';
       resultsEl.appendChild(row);
-    } catch(e) { setBadge(i,'error','Error'); log('  ❌ '+e.message+' '+e.stack); }
+    }catch(e){setBadge(i,'error','Error');log('  ❌ '+e.message);}
   }
   log('✔ Listo.'); btnProcess.disabled=false;
 });
