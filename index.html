@@ -76,17 +76,13 @@
   <footer>JGO Haciendo Logística &mdash; FernandoMarquez</footer>
 </div>
 <script>
-const OFFSET_X = 86.0, PASO_X = 27.5, ANCHO = 22.5, ALTO = 24.67;
-
-const dropZone=document.getElementById('drop-zone'), fileInput=document.getElementById('file-input'),
-      fileList=document.getElementById('file-list'), btnProcess=document.getElementById('btn-process'),
-      logEl=document.getElementById('log'), resultsEl=document.getElementById('results');
+const dropZone=document.getElementById('drop-zone'),fileInput=document.getElementById('file-input'),
+      fileList=document.getElementById('file-list'),btnProcess=document.getElementById('btn-process'),
+      logEl=document.getElementById('log'),resultsEl=document.getElementById('results');
 let files=[];
-
 function fmt(b){return b<1024?b+' B':b<1048576?(b/1024).toFixed(1)+' KB':(b/1048576).toFixed(1)+' MB';}
 function log(m){logEl.style.display='block';logEl.innerHTML+=m+'<br>';logEl.scrollTop=logEl.scrollHeight;}
 function setBadge(i,t,x){const b=document.getElementById('badge-'+i);if(b){b.className='badge badge-'+t;b.textContent=x;}}
-
 function renderList(){
   fileList.innerHTML='';
   files.forEach((f,i)=>{
@@ -110,149 +106,124 @@ dropZone.addEventListener('dragover',e=>{e.preventDefault();dropZone.classList.a
 dropZone.addEventListener('dragleave',()=>dropZone.classList.remove('dragover'));
 dropZone.addEventListener('drop',e=>{e.preventDefault();dropZone.classList.remove('dragover');addFiles(e.dataTransfer.files);});
 
-// Código Python que se ejecuta via Claude API con tool use (bash)
-const PYTHON_CODE = `
-import fitz, re, io, base64, json, sys
+const PYCODE = `import fitz,re,io,base64,json,sys
 from PIL import Image
 import numpy as np
 
-def fix_pdf_bytes(pdf_b64):
-    pdf_bytes = base64.b64decode(pdf_b64)
-    with open('/tmp/input.pdf', 'wb') as f:
-        f.write(pdf_bytes)
-    doc = fitz.open('/tmp/input.pdf')
-    OFFSET_X=86.0; PASO_X=27.5; ANCHO=22.5; ALTO=24.67
-    total_fixed=0; log=[]
-    for page_idx in range(len(doc)):
-        page=doc[page_idx]; H=page.rect.height
-        pix=page.get_pixmap(matrix=fitz.Matrix(2,2))
-        arr=np.array(Image.open(io.BytesIO(pix.tobytes("png"))))
-        links=page.get_links()
-        if not links: continue
-        rows={}
-        for lnk in links:
-            r=lnk["from"]; key=round(r.y0,2)
-            if key not in rows: rows[key]=[]
-            rows[key].append(r)
-        sorted_ys=sorted(rows.keys())
-        xc=max(0,int((rows[sorted_ys[0]][0].x0+OFFSET_X)*2))
-        xe=min(arr.shape[1],xc+int(ANCHO*2))
+def get_thumbs(arr,x0,ancho,scale,n):
+    best=[]
+    for off in [0,27,55,82,110,137]:
+        xc=max(0,int((x0+off)*scale))
+        xe=min(arr.shape[1],xc+int(ancho*scale))
+        if xe<=xc:continue
         strip=arr[:,xc:xe,:]
         rd=(strip.min(axis=2)<150).any(axis=1)
-        thumbs=[]; in_g=False
+        t=[];in_g=False
         for i,v in enumerate(rd):
-            y=i/2
-            if v and not in_g: in_g=True; t0=y
+            y=i/scale
+            if v and not in_g:in_g=True;t0=y
             elif not v and in_g:
                 in_g=False
-                if y-t0>8: thumbs.append(t0)
-        paso=(thumbs[-1]-thumbs[0])/(len(thumbs)-1) if len(thumbs)>1 else 32.5
-        while len(thumbs)<len(sorted_ys): thumbs.append(thumbs[-1]+paso)
-        px=page.xref; po=doc.xref_object(px)
-        rre=re.compile(r"/Rect \\\\[ ([0-9.\\\\-]+) ([0-9.\\\\-]+) ([0-9.\\\\-]+) ([0-9.\\\\-]+) \\\\]")
-        parsed=[]
-        for m in rre.finditer(po):
-            x0=float(m.group(1)); yT=float(m.group(2)); x1=float(m.group(3)); yB=float(m.group(4))
-            if yT>yB and x1>x0: parsed.append({"m":m,"x0":x0,"yT":yT})
+                if y-t0>8:t.append(t0)
+        if len(t)>=len(best) and len(t)>=int(n*0.5):best=t
+    return best
+
+def fix(b64):
+    raw=base64.b64decode(b64)
+    with open('/tmp/i.pdf','wb') as f:f.write(raw)
+    doc=fitz.open('/tmp/i.pdf')
+    OX=86.0;PX=27.5;W=22.5;H2=24.67;total=0;log=[]
+    for pi in range(len(doc)):
+        page=doc[pi];H=page.rect.height
+        arr=np.array(Image.open(io.BytesIO(page.get_pixmap(matrix=fitz.Matrix(3,3)).tobytes("png"))))
+        lks=page.get_links()
+        if not lks:continue
+        rows={}
+        for l in lks:
+            r=l["from"];k=round(r.y0,2)
+            if k not in rows:rows[k]=[]
+            rows[k].append(r)
+        sy=sorted(rows.keys())
+        ty=get_thumbs(arr,rows[sy[0]][0].x0+OX,W,3,len(sy))
+        if not ty:log.append(f"P{pi+1}:sin thumbs");continue
+        paso=(ty[-1]-ty[0])/(len(ty)-1) if len(ty)>1 else 32.5
+        while len(ty)<len(sy):ty.append(ty[-1]+paso)
+        px=page.xref;po=doc.xref_object(px)
+        rr=re.compile(r"/Rect \\\\[ ([0-9.\\\\-]+) ([0-9.\\\\-]+) ([0-9.\\\\-]+) ([0-9.\\\\-]+) \\\\]")
+        parsed=[{"m":m,"x0":float(m.group(1)),"yT":float(m.group(2))} for m in rr.finditer(po) if float(m.group(2))>float(m.group(4)) and float(m.group(3))>float(m.group(1))]
         ro={}
         for p in parsed:
             k=round(p["yT"],1)
-            if k not in ro: ro[k]=[]
+            if k not in ro:ro[k]=[]
             ro[k].append(p)
-        sys_ytops=sorted(ro.keys(),reverse=True)
-        npo=po; rep=0
-        for ri,(yl,yk) in enumerate(zip(sorted_ys,sys_ytops)):
-            if ri>=len(thumbs): break
-            ytp=H-thumbs[ri]; ybp=ytp-ALTO
+        syt=sorted(ro.keys(),reverse=True)
+        npo=po;rep=0
+        for ri,(yl,yk) in enumerate(zip(sy,syt)):
+            if ri>=len(ty):break
+            ytp=H-ty[ri];ybp=ytp-H2
             rrow=sorted(ro[yk],key=lambda p:p["x0"])
             x0r=rows[yl][0].x0
             for ci,p in enumerate(rrow):
-                nx0=x0r+OFFSET_X+ci*PASO_X; nx1=nx0+ANCHO
-                os=p["m"].group(0); ns=f"/Rect [ {nx0:.4f} {ytp:.4f} {nx1:.4f} {ybp:.4f} ]"
-                npo=npo.replace(os,ns,1); rep+=1
-        if rep>0: doc.update_object(px,npo); total_fixed+=rep; log.append(f"Pag {page_idx+1}: {rep} enlaces")
-    doc.save("/tmp/output.pdf")
-    with open("/tmp/output.pdf","rb") as f: rb64=base64.b64encode(f.read()).decode()
-    return {"result":rb64,"log":log,"total":total_fixed}
+                nx0=x0r+OX+ci*PX;nx1=nx0+W
+                os=p["m"].group(0);ns=f"/Rect [ {nx0:.4f} {ytp:.4f} {nx1:.4f} {ybp:.4f} ]"
+                npo=npo.replace(os,ns,1);rep+=1
+        if rep>0:doc.update_object(px,npo);total+=rep;log.append(f"P{pi+1}:{rep}ok")
+    doc.save("/tmp/o.pdf")
+    with open("/tmp/o.pdf","rb") as f:rb=base64.b64encode(f.read()).decode()
+    return {"r":rb,"log":log,"n":total}
 
-pdf_b64=sys.stdin.read().strip()
-result=fix_pdf_bytes(pdf_b64)
-print(json.dumps(result))
-`;
+b64=sys.stdin.read().strip()
+print(json.dumps(fix(b64)))`;
 
-async function fixWithAPI(pdfBytes, filename) {
-  // Convertir PDF a base64
-  const b64 = btoa(String.fromCharCode(...new Uint8Array(pdfBytes)));
-  
-  // Llamar a Claude API con tool use para ejecutar el Python
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 4096,
-      tools: [{type: 'bash_20250124', name: 'bash'}],
-      messages: [{
-        role: 'user',
-        content: `Execute this Python script. Pass the following base64 PDF as stdin input and return ONLY the JSON output:\n\nScript:\n\`\`\`python\n${PYTHON_CODE}\n\`\`\`\n\nInput (base64 PDF, pass as stdin):\n${b64}`
-      }]
-    })
-  });
-  
-  const data = await response.json();
-  
-  // Extraer resultado
-  let resultText = '';
-  for (const block of data.content) {
-    if (block.type === 'tool_result' || block.type === 'text') {
-      resultText += (block.content?.[0]?.text || block.text || '');
-    }
-  }
-  
-  // Parsear JSON
-  const jsonMatch = resultText.match(/\{[^{}]*"result"[^{}]*\}/s);
-  if (!jsonMatch) throw new Error('No se encontró resultado JSON');
-  return JSON.parse(jsonMatch[0]);
-}
-
-async function fixPdf(file, idx) {
+async function fixPdf(file,idx){
   setBadge(idx,'working','Procesando…');
   log('📄 '+file.name+' ('+fmt(file.size)+')');
-  
-  const pdfBytes = await file.arrayBuffer();
-  
-  try {
-    log('  → Enviando a procesar...');
-    const result = await fixWithAPI(pdfBytes, file.name);
-    
-    if (result.log) result.log.forEach(l => log('  → '+l));
-    log('  ✅ '+result.total+' enlaces corregidos');
-    setBadge(idx,'ok',result.total+' fix');
-    
-    // Decodificar PDF resultado
-    const fixedBytes = Uint8Array.from(atob(result.result), c => c.charCodeAt(0));
-    const blob = new Blob([fixedBytes], {type:'application/pdf'});
-    const url = URL.createObjectURL(blob);
-    const dl = file.name.replace(/\.pdf$/i,'')+'_fix.pdf';
-    
-    const row = document.createElement('div'); row.className='result-row';
-    row.innerHTML='<span>✅</span><span class="r-name">'+dl+'</span><span class="r-info">'+fmt(fixedBytes.length)+'</span><a class="dl-btn" href="'+url+'" download="'+dl+'">⬇ Descargar</a>';
-    resultsEl.appendChild(row);
-    
-  } catch(e) {
-    setBadge(idx,'error','Error');
-    log('  ❌ '+e.message);
+  const pdfBytes=await file.arrayBuffer();
+  const b64=btoa(String.fromCharCode(...new Uint8Array(pdfBytes)));
+  log('  → Enviando a Claude API...');
+  const resp=await fetch('https://api.anthropic.com/v1/messages',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      model:'claude-sonnet-4-6',
+      max_tokens:8192,
+      tools:[{type:'bash_20250124',name:'bash'}],
+      messages:[{role:'user',content:'Run this Python script. Pass as stdin exactly this base64 string (nothing else). Return ONLY the last line of stdout which is a JSON object.\n\nScript:\n```python\n'+PYCODE+'\n```\n\nStdin input:\n'+b64}]
+    })
+  });
+  const data=await resp.json();
+  let txt='';
+  for(const blk of (data.content||[])){
+    if(blk.type==='tool_result') txt+=(blk.content?.[0]?.text||'');
+    if(blk.type==='text') txt+=blk.text||'';
   }
+  // Encontrar el JSON
+  const lines=txt.split('\n').filter(l=>l.trim());
+  let result=null;
+  for(let i=lines.length-1;i>=0;i--){
+    try{result=JSON.parse(lines[i]);break;}catch(e){}
+  }
+  if(!result||!result.r) throw new Error('No se obtuvo resultado. Respuesta: '+txt.slice(0,200));
+  if(result.log) result.log.forEach(l=>log('  → '+l));
+  log('  ✅ '+result.n+' enlaces corregidos');
+  setBadge(idx,'ok',result.n+' fix');
+  const fixed=Uint8Array.from(atob(result.r),c=>c.charCodeAt(0));
+  const blob=new Blob([fixed],{type:'application/pdf'});
+  const url=URL.createObjectURL(blob);
+  const dl=file.name.replace(/\.pdf$/i,'')+'_fix.pdf';
+  const row=document.createElement('div');row.className='result-row';
+  row.innerHTML='<span>✅</span><span class="r-name">'+dl+'</span><span class="r-info">'+fmt(fixed.length)+'</span><a class="dl-btn" href="'+url+'" download="'+dl+'">⬇ Descargar</a>';
+  resultsEl.appendChild(row);
 }
 
 btnProcess.addEventListener('click',async()=>{
   btnProcess.disabled=true;logEl.innerHTML='';resultsEl.innerHTML='';
   log('🔧 Procesando...');
   for(let i=0;i<files.length;i++){
-    try{ await fixPdf(files[i],i); }
-    catch(e){ setBadge(i,'error','Error');log('  ❌ '+e.message); }
+    try{await fixPdf(files[i],i);}
+    catch(e){setBadge(i,'error','Error');log('  ❌ '+e.message);}
   }
-  log('✔ Listo.'); btnProcess.disabled=false;
+  log('✔ Listo.');btnProcess.disabled=false;
 });
 </script>
 </body>
