@@ -45,6 +45,7 @@ main{flex:1;display:flex;align-items:flex-start;justify-content:center;padding:2
 .result-row .r-info{font-size:.74rem;color:var(--green);flex-shrink:0;}
 .dl-btn{padding:5px 14px;background:var(--green);color:#fff;border-radius:7px;font-size:.76rem;font-weight:700;text-decoration:none;white-space:nowrap;flex-shrink:0;}
 .dl-btn:hover{background:var(--green-border);}
+.status-bar{background:rgba(255,255,150,0.15);border:1px solid rgba(255,255,150,0.3);border-radius:8px;padding:.6rem 1rem;margin-bottom:1rem;font-size:.78rem;color:#b8a000;display:none;}
 footer{text-align:center;font-size:11px;color:rgba(255,255,255,.40);padding:1rem;}
 @media(max-width:600px){header{padding:.65rem 1rem;}header img{height:36px;}header h1{font-size:1rem;}main{padding:1.2rem .75rem 1.5rem;}.card{padding:1.4rem 1rem;}#drop-zone{padding:1.8rem .75rem;}}</style>
 </head>
@@ -59,6 +60,7 @@ footer{text-align:center;font-size:11px;color:rgba(255,255,255,.40);padding:1rem
   </header>
   <main>
     <div class="card">
+      <div id="status-bar" class="status-bar">⏳ Iniciando servidor... (primera vez puede demorar ~30 seg)</div>
       <div id="drop-zone">
         <input type="file" id="file-input" accept=".pdf" multiple/>
         <span class="icon">📂</span>
@@ -74,12 +76,16 @@ footer{text-align:center;font-size:11px;color:rgba(255,255,255,.40);padding:1rem
   <footer>JGO Haciendo Logística &mdash; FernandoMarquez</footer>
 </div>
 <script>
-// Script Python embebido como base64 (sin problemas de escaping)
-const PY_B64 = "aW1wb3J0IGZpdHoscmUsaW8sYmFzZTY0LGpzb24sc3lzCmZyb20gUElMIGltcG9ydCBJbWFnZQppbXBvcnQgbnVtcHkgYXMgbnAKCmRlZiBnZXRfdGh1bWJzKGFycix4MCxhbmNobyxzY2FsZSxuKToKICAgIGJlc3Q9W10KICAgIGZvciBvZmYgaW4gWzAsMjcsNTUsODIsMTEwLDEzN106CiAgICAgICAgeGM9bWF4KDAsaW50KCh4MCtvZmYpKnNjYWxlKSkKICAgICAgICB4ZT1taW4oYXJyLnNoYXBlWzFdLHhjK2ludChhbmNobypzY2FsZSkpCiAgICAgICAgaWYgeGU8PXhjOmNvbnRpbnVlCiAgICAgICAgc3RyaXA9YXJyWzoseGM6eGUsOl0KICAgICAgICByZD0oc3RyaXAubWluKGF4aXM9Mik8MTUwKS5hbnkoYXhpcz0xKQogICAgICAgIHQ9W107aW5fZz1GYWxzZQogICAgICAgIGZvciBpLHYgaW4gZW51bWVyYXRlKHJkKToKICAgICAgICAgICAgeT1pL3NjYWxlCiAgICAgICAgICAgIGlmIHYgYW5kIG5vdCBpbl9nOmluX2c9VHJ1ZTt0MD15CiAgICAgICAgICAgIGVsaWYgbm90IHYgYW5kIGluX2c6CiAgICAgICAgICAgICAgICBpbl9nPUZhbHNlCiAgICAgICAgICAgICAgICBpZiB5LXQwPjg6dC5hcHBlbmQodDApCiAgICAgICAgaWYgbGVuKHQpPj1sZW4oYmVzdCkgYW5kIGxlbih0KT49aW50KG4qMC41KTpiZXN0PXQKICAgIHJldHVybiBiZXN0CgpkZWYgZml4KGI2NGluKToKICAgIHJhdz1iYXNlNjQuYjY0ZGVjb2RlKGI2NGluKQogICAgd2l0aCBvcGVuKCcvdG1wL2kucGRmJywnd2InKSBhcyBmOmYud3JpdGUocmF3KQogICAgZG9jPWZpdHoub3BlbignL3RtcC9pLnBkZicpCiAgICBPWD04Ni4wO1BYPTI3LjU7Vz0yMi41O0gyPTI0LjY3O3RvdGFsPTA7bG9nPVtdCiAgICBmb3IgcGkgaW4gcmFuZ2UobGVuKGRvYykpOgogICAgICAgIHBhZ2U9ZG9jW3BpXTtIPXBhZ2UucmVjdC5oZWlnaHQKICAgICAgICBhcnI9bnAuYXJyYXkoSW1hZ2Uub3Blbihpby5CeXRlc0lPKHBhZ2UuZ2V0X3BpeG1hcChtYXRyaXg9Zml0ei5NYXRyaXgoMywzKSkudG9ieXRlcygicG5nIikpKSkKICAgICAgICBsa3M9cGFnZS5nZXRfbGlua3MoKQogICAgICAgIGlmIG5vdCBsa3M6Y29udGludWUKICAgICAgICByb3dzPXt9CiAgICAgICAgZm9yIGwgaW4gbGtzOgogICAgICAgICAgICByPWxbImZyb20iXTtrPXJvdW5kKHIueTAsMikKICAgICAgICAgICAgaWYgayBub3QgaW4gcm93czpyb3dzW2tdPVtdCiAgICAgICAgICAgIHJvd3Nba10uYXBwZW5kKHIpCiAgICAgICAgc3k9c29ydGVkKHJvd3Mua2V5cygpKQogICAgICAgIHR5PWdldF90aHVtYnMoYXJyLHJvd3Nbc3lbMF1dWzBdLngwK09YLFcsMyxsZW4oc3kpKQogICAgICAgIGlmIG5vdCB0eTpsb2cuYXBwZW5kKCJQIitzdHIocGkrMSkrIjpzaW4gdGh1bWJzIik7Y29udGludWUKICAgICAgICBwYXNvPSh0eVstMV0tdHlbMF0pLyhsZW4odHkpLTEpIGlmIGxlbih0eSk+MSBlbHNlIDMyLjUKICAgICAgICB3aGlsZSBsZW4odHkpPGxlbihzeSk6dHkuYXBwZW5kKHR5Wy0xXStwYXNvKQogICAgICAgIHB4PXBhZ2UueHJlZjtwbz1kb2MueHJlZl9vYmplY3QocHgpCiAgICAgICAgcnI9cmUuY29tcGlsZShyIi9SZWN0IFxbIChbMC05LlwtXSspIChbMC05LlwtXSspIChbMC05LlwtXSspIChbMC05LlwtXSspIFxdIikKICAgICAgICBwYXJzZWQ9W3sibSI6bSwieDAiOmZsb2F0KG0uZ3JvdXAoMSkpLCJ5VCI6ZmxvYXQobS5ncm91cCgyKSl9IGZvciBtIGluIHJyLmZpbmRpdGVyKHBvKSBpZiBmbG9hdChtLmdyb3VwKDIpKT5mbG9hdChtLmdyb3VwKDQpKSBhbmQgZmxvYXQobS5ncm91cCgzKSk+ZmxvYXQobS5ncm91cCgxKSldCiAgICAgICAgcm89e30KICAgICAgICBmb3IgcCBpbiBwYXJzZWQ6CiAgICAgICAgICAgIGs9cm91bmQocFsieVQiXSwxKQogICAgICAgICAgICBpZiBrIG5vdCBpbiBybzpyb1trXT1bXQogICAgICAgICAgICByb1trXS5hcHBlbmQocCkKICAgICAgICBzeXQ9c29ydGVkKHJvLmtleXMoKSxyZXZlcnNlPVRydWUpCiAgICAgICAgbnBvPXBvO3JlcD0wCiAgICAgICAgZm9yIHJpLCh5bCx5aykgaW4gZW51bWVyYXRlKHppcChzeSxzeXQpKToKICAgICAgICAgICAgaWYgcmk+PWxlbih0eSk6YnJlYWsKICAgICAgICAgICAgeXRwPUgtdHlbcmldO3licD15dHAtSDIKICAgICAgICAgICAgcnJvdz1zb3J0ZWQocm9beWtdLGtleT1sYW1iZGEgcDpwWyJ4MCJdKQogICAgICAgICAgICB4MHI9cm93c1t5bF1bMF0ueDAKICAgICAgICAgICAgZm9yIGNpLHAgaW4gZW51bWVyYXRlKHJyb3cpOgogICAgICAgICAgICAgICAgbngwPXgwcitPWCtjaSpQWDtueDE9bngwK1cKICAgICAgICAgICAgICAgIG9zPXBbIm0iXS5ncm91cCgwKTtucz0iL1JlY3QgWyAiKyJ7Oi40Zn0iLmZvcm1hdChueDApKyIgIisiezouNGZ9Ii5mb3JtYXQoeXRwKSsiICIrIns6LjRmfSIuZm9ybWF0KG54MSkrIiAiKyJ7Oi40Zn0iLmZvcm1hdCh5YnApKyIgXSIKICAgICAgICAgICAgICAgIG5wbz1ucG8ucmVwbGFjZShvcyxucywxKTtyZXArPTEKICAgICAgICBpZiByZXA+MDpkb2MudXBkYXRlX29iamVjdChweCxucG8pO3RvdGFsKz1yZXA7bG9nLmFwcGVuZCgiUCIrc3RyKHBpKzEpKyI6IitzdHIocmVwKSsib2siKQogICAgZG9jLnNhdmUoIi90bXAvby5wZGYiKQogICAgd2l0aCBvcGVuKCIvdG1wL28ucGRmIiwicmIiKSBhcyBmOnJiPWJhc2U2NC5iNjRlbmNvZGUoZi5yZWFkKCkpLmRlY29kZSgpCiAgICByZXR1cm4geyJyIjpyYiwibG9nIjpsb2csIm4iOnRvdGFsfQoKYjY0aW49c3lzLnN0ZGluLnJlYWQoKS5zdHJpcCgpCnJlc3VsdD1maXgoYjY0aW4pCnByaW50KGpzb24uZHVtcHMocmVzdWx0KSkK";
+// URL del backend en Render.com
+const API_URL = 'https://pdf-fix-api.onrender.com/fix';
 
-const dropZone=document.getElementById('drop-zone'),fileInput=document.getElementById('file-input'),
-      fileList=document.getElementById('file-list'),btnProcess=document.getElementById('btn-process'),
-      logEl=document.getElementById('log'),resultsEl=document.getElementById('results');
+const dropZone=document.getElementById('drop-zone'),
+      fileInput=document.getElementById('file-input'),
+      fileList=document.getElementById('file-list'),
+      btnProcess=document.getElementById('btn-process'),
+      logEl=document.getElementById('log'),
+      resultsEl=document.getElementById('results'),
+      statusBar=document.getElementById('status-bar');
 let files=[];
 
 function fmt(b){return b<1024?b+' B':b<1048576?(b/1024).toFixed(1)+' KB':(b/1048576).toFixed(1)+' MB';}
@@ -90,7 +96,10 @@ function renderList(){
   fileList.innerHTML='';
   files.forEach((f,i)=>{
     const c=document.createElement('div');c.className='file-card';c.id='card-'+i;
-    c.innerHTML='<span class="pdf-icon">📄</span><span class="name" title="'+f.name+'">'+f.name+'</span><span class="size">'+fmt(f.size)+'</span><span class="badge badge-wait" id="badge-'+i+'">Pendiente</span><button class="remove-btn" data-idx="'+i+'">✕</button>';
+    c.innerHTML='<span class="pdf-icon">📄</span><span class="name" title="'+f.name+'">'+f.name+'</span>'
+      +'<span class="size">'+fmt(f.size)+'</span>'
+      +'<span class="badge badge-wait" id="badge-'+i+'">Pendiente</span>'
+      +'<button class="remove-btn" data-idx="'+i+'">✕</button>';
     fileList.appendChild(c);
   });
   fileList.querySelectorAll('.remove-btn').forEach(b=>b.addEventListener('click',()=>{
@@ -109,9 +118,9 @@ dropZone.addEventListener('dragover',e=>{e.preventDefault();dropZone.classList.a
 dropZone.addEventListener('dragleave',()=>dropZone.classList.remove('dragover'));
 dropZone.addEventListener('drop',e=>{e.preventDefault();dropZone.classList.remove('dragover');addFiles(e.dataTransfer.files);});
 
-// Convertir ArrayBuffer a base64 de forma segura (sin spread)
-function toBase64(arrayBuf){
-  const u8=new Uint8Array(arrayBuf);
+// Convertir ArrayBuffer a base64 (sin spread para evitar stack overflow)
+function toBase64(buf){
+  const u8=new Uint8Array(buf);
   let bin='';
   for(let i=0;i<u8.length;i++) bin+=String.fromCharCode(u8[i]);
   return btoa(bin);
@@ -121,66 +130,31 @@ async function fixPdf(file,idx){
   setBadge(idx,'working','Procesando…');
   log('📄 '+file.name+' ('+fmt(file.size)+')');
 
-  // Convertir PDF a base64
-  const pdfBuf=await file.arrayBuffer();
-  const pdfB64=toBase64(pdfBuf);
-  log('  → PDF convertido, enviando...');
+  const pdfB64=toBase64(await file.arrayBuffer());
+  log('  → Enviando al servidor...');
+  statusBar.style.display='block';
 
-  // Decodificar el script Python desde base64
-  const pyScript=atob(PY_B64);
-
-  // Llamar a Claude API con bash tool
-  const resp=await fetch('https://api.anthropic.com/v1/messages',{
+  const resp=await fetch(API_URL,{
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({
-      model:'claude-sonnet-4-6',
-      max_tokens:8192,
-      tools:[{type:'bash_20250124',name:'bash'}],
-      messages:[{
-        role:'user',
-        content:'Execute the following Python 3 script. The script reads base64-encoded PDF from stdin and prints a JSON result. Provide the stdin input as shown below. Output ONLY the last stdout line.
-
-Script:
-```python
-'+pyScript+'
-```
-
-Stdin:
-'+pdfB64
-      }]
-    })
+    body:JSON.stringify({pdf:pdfB64})
   });
 
-  const data=await resp.json();
-  
-  // Extraer resultado JSON de la respuesta
-  let txt='';
-  for(const blk of (data.content||[])){
-    if(blk.type==='tool_result'){
-      for(const c of (blk.content||[])) if(c.type==='text') txt+=c.text;
-    }
-    if(blk.type==='text') txt+=blk.text||'';
+  statusBar.style.display='none';
+
+  if(!resp.ok){
+    const err=await resp.text();
+    throw new Error('Error del servidor: '+resp.status+' '+err.slice(0,200));
   }
 
-  // Buscar el JSON en la salida
-  let result=null;
-  const lines=txt.trim().split('\n');
-  for(let i=lines.length-1;i>=0;i--){
-    try{result=JSON.parse(lines[i].trim());if(result&&result.r)break;}catch(e){}
-  }
-
-  if(!result||!result.r){
-    console.error('API response:',data);
-    throw new Error('Sin resultado válido. Ver consola. Respuesta: '+txt.slice(0,300));
-  }
+  const result=await resp.json();
+  if(result.error) throw new Error(result.error);
 
   if(result.log) result.log.forEach(l=>log('  → '+l));
-  log('  ✅ '+result.n+' enlaces corregidos');
-  setBadge(idx,'ok',result.n+' fix');
+  log('  ✅ '+result.total+' enlaces corregidos');
+  setBadge(idx,'ok',result.total+' fix');
 
-  // Decodificar PDF resultado
-  const fixedBin=atob(result.r);
+  const fixedBin=atob(result.pdf);
   const fixedBytes=new Uint8Array(fixedBin.length);
   for(let i=0;i<fixedBin.length;i++) fixedBytes[i]=fixedBin.charCodeAt(i);
 
@@ -188,9 +162,14 @@ Stdin:
   const url=URL.createObjectURL(blob);
   const dl=file.name.replace(/\.pdf$/i,'')+'_fix.pdf';
   const row=document.createElement('div');row.className='result-row';
-  row.innerHTML='<span>✅</span><span class="r-name">'+dl+'</span><span class="r-info">'+fmt(fixedBytes.length)+'</span><a class="dl-btn" href="'+url+'" download="'+dl+'">⬇ Descargar</a>';
+  row.innerHTML='<span>✅</span><span class="r-name">'+dl+'</span>'
+    +'<span class="r-info">'+fmt(fixedBytes.length)+'</span>'
+    +'<a class="dl-btn" href="'+url+'" download="'+dl+'">⬇ Descargar</a>';
   resultsEl.appendChild(row);
 }
+
+// Al cargar la página, hacer un health-check para despertar el servidor
+fetch(API_URL.replace('/fix','/health')).catch(()=>{});
 
 btnProcess.addEventListener('click',async()=>{
   btnProcess.disabled=true;logEl.innerHTML='';resultsEl.innerHTML='';
